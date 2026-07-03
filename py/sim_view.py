@@ -50,8 +50,10 @@ class SimView(Protocol):
     volume: float
     point_size: int
     icon_size: int
+    fix_icon_point_size: bool
     disable_dpi_scaling: bool
     window_topmost: bool
+    icon_set: str
 
     res_mgr: object
     map_mgr: object

@@ -8,7 +8,7 @@ import logging
 from typing import List, Optional, Dict, Any, Tuple, TYPE_CHECKING
 from datetime import datetime
 
-from .constants import f_s, rt, TXT, CPH, CONFIG_FILE
+from .constants import f_s, rt, TXT, CPH, CONFIG_FILE, SEASON_SPEED_DEFAULT, MAX_INFO_BOX_SLOTS
 from .config import AppConfig
 from .typhoon import Typhoon
 from .landfall_effect import LandfallEffect
@@ -67,6 +67,8 @@ class _ConfigProperty:
 
     def __set__(self, obj: TySim, value) -> None:
         setattr(obj.cfg, self._name, value)
+        if self._name == 'icon_set':
+            obj.res_mgr.icon_set = value
 
 
 class _RepoProperty:
@@ -210,10 +212,11 @@ class TySim(TySimUtilsMixin,
         self.pl = False
         self.lst = pygame.time.get_ticks()
         self._fps = 60.0
+        self.dark_mode = True
 
         self.st = "010100"
         self.ste = 0.0
-        self.ssf = 12 * 3600
+        self.ssf = SEASON_SPEED_DEFAULT
         self.tsa = self.csa = 0.0
         self.sy = self.sty = self.edy = 2000
         self.yf = False
@@ -223,7 +226,10 @@ class TySim(TySimUtilsMixin,
         self.effects: List[LandfallEffect] = []
 
         self.info_box_slots: Dict[Typhoon, int] = {}
-        self.info_box_free_slots = list(range(14))
+        self.info_box_free_slots = list(range(MAX_INFO_BOX_SLOTS))
+
+        self.pst = 0
+        self.po = 0
 
         self.error_message = ""
         self.error_time = 0
@@ -251,11 +257,15 @@ class TySim(TySimUtilsMixin,
 
     def _init_resource_managers(self) -> None:
         self.res_mgr = ResourceManager()
+        self.res_mgr.icon_set = self.cfg.icon_set
         self.map_mgr = MapManager(self)
+
+    def _season_dt(self) -> datetime:
+        return datetime(self.sy, int(self.st[0:2]), int(self.st[2:4]), int(self.st[4:6]))
 
     def _init_season_ace(self) -> None:
         try:
-            dt = datetime(self.sy, int(self.st[0:2]), int(self.st[2:4]), int(self.st[4:6]))
+            dt = self._season_dt()
             self.current_ace_year = self.ace_engine.ace_year(dt)
             self.csa = self.ace_engine.cumulative_ace_up_to(dt)
         except Exception:
@@ -312,8 +322,7 @@ class TySim(TySimUtilsMixin,
         self.repo.recalc_all_ace()
         if hasattr(self, 'md') and self.md == self.MODE_SEASON:
             try:
-                current_dt = datetime(
-                    self.sy, int(self.st[0:2]), int(self.st[2:4]), int(self.st[4:6]))
+                current_dt = self._season_dt()
                 self.current_ace_year = self.ace_engine.ace_year(current_dt)
                 self.csa = self.ace_engine.cumulative_ace_up_to(current_dt)
             except Exception:
@@ -359,7 +368,6 @@ class TySim(TySimUtilsMixin,
 
     def update(self, dt: float) -> None:
         ct = pygame.time.get_ticks()
-        dt = (ct - self.lst) / 1000.0
         self.lst = ct
         self._fps = 1.0 / dt if dt > 0 else 60.0
         self.input_handler.update(ct)

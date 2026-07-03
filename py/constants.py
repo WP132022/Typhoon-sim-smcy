@@ -31,21 +31,20 @@ LIST_BG = (240, 248, 255, 220)
 LIST_HL = (180, 220, 255, 200)
 DB = (128, 128, 128)
 EX = (173, 216, 230)
-TD = (70, 130, 180)
-TS = (0, 180, 0)
-STS = (173, 255, 47)
-C1 = (255, 255, 153)
-C2 = (210, 180, 140)
-C3 = (255, 165, 0)
+TD = (0, 96, 255)
+TS = (14, 209, 69)
+STS = (0, 255, 0)
+C1 = (255, 255, 0)
+C2 = (255, 176, 0)
+C3 = (255, 96, 0)
 C4 = (255, 0, 0)
-C5_L = (221, 160, 221)
-C5_D = (160, 32, 240)
+C5_L = (255, 0, 255)
+C5_M = (191, 0, 255)
+C5_D = (128, 0, 255)
 MD_COLOR = (0, 255, 0)
-C2_LIGHT = (255, 200, 100)
-C2_DARK = (255, 140, 0)
-C2_MINUS = C2_LIGHT
-C3_MINUS = (255, 180, 60)
-C4_ST = (200, 0, 30)
+C2_MINUS = (255, 212, 0)
+C3_MINUS = (255, 136, 0)
+C4_ST = (255, 0, 191)
 WV = (0, 191, 255)
 
 BUTTON_BORDER = (70, 130, 180)
@@ -73,6 +72,15 @@ SPEED_BAR_FILL = BUTTON_BORDER
 FUTURE_LINE_ALPHA = 128
 
 OCEAN_AREA_LINE = (255, 255, 100, 60)
+
+FADE_DURATION = 30.0
+SEASON_SPEED_DEFAULT = 12 * 3600
+MAX_INFO_BOX_SLOTS = 14
+
+ICON_SET_SIMPLE = "simple"
+ICON_SET_SMCY = "smcy"
+ICON_SET_NAMES = {ICON_SET_SIMPLE: "简单图标", ICON_SET_SMCY: "SMCY图标"}
+ICON_SET_DEFAULT = ICON_SET_SIMPLE
 
 SUCAI_DIR = "./assets/"
 SOUND_DIR = "./sound/"
@@ -138,6 +146,23 @@ TIME_JUMP_HEIGHT = 380
 SETTINGS_WIDTH = 500
 SETTINGS_HEIGHT = 620
 
+# 暗色主题配色
+SETTINGS_DARK_BG = (25, 28, 35, 235)
+SETTINGS_DARK_OVERLAY = (0, 0, 0, 140)
+SETTINGS_ACCENT = (121, 217, 255)
+SETTINGS_TEXT_LIGHT = (220, 220, 240)
+SETTINGS_TEXT_DIM = (140, 145, 160)
+SETTINGS_TAB_BG = (35, 38, 48)
+SETTINGS_TAB_ACTIVE = (45, 50, 62)
+SETTINGS_TAB_HOVER = (50, 55, 68)
+SETTINGS_INPUT_BG = (40, 44, 55)
+SETTINGS_INPUT_BORDER = (60, 65, 78)
+SETTINGS_CHECKBOX_BG = (55, 60, 75)
+SETTINGS_CHECKBOX_CHECK = SETTINGS_ACCENT
+SETTINGS_TOGGLE_ON = (70, 130, 200)
+SETTINGS_TOGGLE_OFF = (50, 55, 68)
+SETTINGS_TAB_NAMES = ["通用", "显示", "地图", "播放", "ACE", "数据"]
+
 DEFAULT_POINT_RADIUS = 3
 PATH_LINE_WIDTH = 2
 MAX_CIRCLE_CACHE = 256
@@ -154,7 +179,7 @@ def _load_font(filename: str, size: int, fallback_size: int):
     path = os.path.join(_FONT_DIR, filename)
     try:
         return pygame.font.Font(path, size)
-    except:
+    except Exception:
         return pygame.font.Font(None, fallback_size)
 
 font_en_l = _load_font('bahnschrift.ttf', 22, 22)

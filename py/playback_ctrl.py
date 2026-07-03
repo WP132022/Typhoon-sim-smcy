@@ -6,7 +6,8 @@ import pygame
 from typing import List, Optional, TYPE_CHECKING
 
 from .typhoon import Typhoon
-from .landfall_effect import LandfallEffect
+from .landfall_effect import LandfallEffect, LandfallEffectSMCY
+from .constants import FADE_DURATION, ICON_SET_SMCY
 
 if TYPE_CHECKING:
     from .data_repo import DataRepository
@@ -72,11 +73,11 @@ class PlaybackController:
         elapsed = (ct - ty.finish_time) / 1000.0
         v = ty.v
         if self.cfg.fade_typhoon:
-            v.icon_alpha = max(0, int(255 * (1.0 - elapsed / 30.0)))
+            v.icon_alpha = max(0, int(255 * (1.0 - elapsed / FADE_DURATION)))
         else:
             v.icon_alpha = 255
         if self.cfg.fade_path:
-            v.path_alpha = max(0, int(255 * (1.0 - elapsed / 30.0)))
+            v.path_alpha = max(0, int(255 * (1.0 - elapsed / FADE_DURATION)))
         else:
             v.path_alpha = 0
 
@@ -220,11 +221,19 @@ class PlaybackController:
                     'lo': pos['lo'],
                 })
                 if ty.ci != 0:
-                    img1, img2 = self.res_mgr.get_landfall_images(strength)
-                    if img1 and img2:
-                        self.effects.append(LandfallEffect(
-                            strength, pos['lo'], pos['la'], img1, img2, ct,
-                            self.view.latlon_to_screen))
+                    if self.cfg.icon_set == ICON_SET_SMCY:
+                        from .smcy_icon import get_landfall_frames
+                        frames = get_landfall_frames(strength)
+                        if frames:
+                            self.effects.append(LandfallEffectSMCY(
+                                strength, pos['lo'], pos['la'], frames, ct,
+                                self.view.latlon_to_screen))
+                    else:
+                        img1, img2 = self.res_mgr.get_landfall_images(strength)
+                        if img1 and img2:
+                            self.effects.append(LandfallEffect(
+                                strength, pos['lo'], pos['la'], img1, img2, ct,
+                                self.view.latlon_to_screen))
                     sound = self.res_mgr.get_sound(strength)
                     if sound:
                         sound.set_volume(self.cfg.volume)

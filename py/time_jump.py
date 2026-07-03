@@ -7,6 +7,7 @@ from datetime import datetime
 from .constants import (
     f_s, f_m, rt, TXT, BUTTON_BORDER, BUTTON_DISABLED,
     TIME_JUMP_WIDTH, TIME_JUMP_HEIGHT, DIALOG_TITLE_BAR_HEIGHT,
+    SETTINGS_TEXT_LIGHT, SETTINGS_TEXT_DIM,
 )
 from .input_field import InputField
 from .dialog_base import DraggableDialog
@@ -49,16 +50,33 @@ class TimeJump(DraggableDialog):
     def draw(self, surface):
         if not self.active:
             return
-        # 不再绘制黑色遮罩
-        self.draw_background(surface, self.dialog_rect)
-        self.draw_title(surface, self.title, self.dialog_rect, y_offset=20)
+        if self.dark_mode:
+            self.draw_dark_overlay(surface)
+            self.draw_dark_panel(surface, self.dialog_rect)
+            self.draw_dark_title(surface, "时间跳跃 (台风季模式)", self.dialog_rect)
+            hint_color = SETTINGS_TEXT_DIM
+            label_color = SETTINGS_TEXT_LIGHT
+        else:
+            self.draw_background(surface, self.dialog_rect)
+            self.draw_title(surface, self.title, self.dialog_rect, y_offset=20)
+            hint_color = TXT
+            label_color = TXT
         for f in self.fields:
             f.draw(surface)
-        surface.blit(self.hint, (self.dialog_rect.x + 50, self.dialog_rect.y + 310))
-        self.draw_button(surface, (self.dialog_rect.x + 100, self.dialog_rect.y + 340, 80, 30),
-                         self.confirm_text, BUTTON_BORDER)
-        self.draw_button(surface, (self.dialog_rect.x + 220, self.dialog_rect.y + 340, 80, 30),
-                         self.cancel_text, BUTTON_DISABLED)
+        hint = rt(f_s, "使用Tab切换字段，Enter确认，ESC取消", hint_color)
+        surface.blit(hint, (self.dialog_rect.x + 50, self.dialog_rect.y + 310))
+        # 标签
+        for i, label in enumerate(['年份:', '月份:', '日期:', '小时:']):
+            lb = rt(f_s, label, label_color)
+            surface.blit(lb, (self.dialog_rect.x + 30, self.dialog_rect.y + 80 + i * 45 + 2))
+        if self.dark_mode:
+            self.draw_dark_button(surface, pygame.Rect(self.dialog_rect.x + 100, self.dialog_rect.y + 340, 80, 30), "确认", accent=True)
+            self.draw_dark_button(surface, pygame.Rect(self.dialog_rect.x + 220, self.dialog_rect.y + 340, 80, 30), "取消")
+        else:
+            self.draw_button(surface, (self.dialog_rect.x + 100, self.dialog_rect.y + 340, 80, 30),
+                             self.confirm_text, BUTTON_BORDER)
+            self.draw_button(surface, (self.dialog_rect.x + 220, self.dialog_rect.y + 340, 80, 30),
+                             self.cancel_text, BUTTON_DISABLED)
 
     def handle_event(self, e):
         if not self.active:

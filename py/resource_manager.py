@@ -16,6 +16,7 @@ from .constants import (
     SUCAI_DIR, f_s, f_m, f_l, f_name,
     MD_COLOR, STS, C5_L, C5_D, DB, EX, TD, TS, C1, C2, C3, C4, C2_MINUS, C3_MINUS, C4_ST, WV,
     DEFAULT_MAP, LAND_MASK, BUTTON_BORDER, AREA_OCEAN_FILE, OCEAN_AREA_LINE,
+    ICON_SET_DEFAULT,
     find_insensitive_path as fip
 )
 
@@ -220,14 +221,33 @@ class ResourceManager:
         self.sounds: Dict[str, pygame.mixer.Sound] = {}
         self.fonts = {'f_s': f_s, 'f_m': f_m, 'f_l': f_l, 'f_name': f_name}
         self.ocean_areas = OceanAreaManager()
+        self._icon_set = ICON_SET_DEFAULT
+        self._load_all()
+
+    @property
+    def icon_set(self) -> str:
+        return self._icon_set
+
+    @icon_set.setter
+    def icon_set(self, value: str) -> None:
+        if value != self._icon_set:
+            self._icon_set = value
+            self._reload_icons()
+
+    def _icon_dir(self) -> str:
+        return os.path.join(SUCAI_DIR, self._icon_set)
+
+    def _reload_icons(self) -> None:
+        self.images.clear()
         self._load_all()
 
     def _load_all(self):
+        icon_dir = self._icon_dir()
         categories = ['DB', 'EX', 'TD', 'TS', 'STS', 'C1', 'C2-', 'C2', 'C3-', 'C3', 'C4', 'C4-ST', 'C5',
                       'MD', 'SD', 'SS', 'LO', 'WV', 'C3_3', 'C4_3', 'C5_3']
         for cat in categories:
-            ring_path = fip(os.path.join(SUCAI_DIR, f"{cat}_1.png"))
-            center_path = fip(os.path.join(SUCAI_DIR, f"{cat}_2.png"))
+            ring_path = fip(os.path.join(icon_dir, f"{cat}_1.png"))
+            center_path = fip(os.path.join(icon_dir, f"{cat}_2.png"))
             ring_img, center_img = None, None
             if ring_path:
                 try: ring_img = pygame.image.load(ring_path).convert_alpha()
@@ -238,10 +258,13 @@ class ResourceManager:
             self.images[f"{cat}_ring"] = ring_img or self._create_ring_icon(cat)
             self.images[f"{cat}_center"] = center_img or self._create_center_icon(cat)
 
-        for sub, base, color, mult in [('C2-', 'C2', C2_MINUS, False), ('C4-ST', 'C4', C4_ST, True)]:
+        for sub, base, color, mult in [('C2-', 'C2', C2_MINUS, False), ('C3-', 'C3', C3_MINUS, False), ('C4-ST', 'C4', C4_ST, False)]:
             ring_img = self.images.get(f"{base}_ring")
             if ring_img:
                 self.images[f"{sub}_ring"] = self._recolor_icon(ring_img, color, mult)
+            center_img = self.images.get(f"{base}_center")
+            if center_img:
+                self.images[f"{sub}_center"] = center_img
 
         lf_map = {'C1': 'C1', 'C2-': 'C2', 'C2': 'C2', 'C3-': 'C3', 'C3': 'C3',
                   'C4': 'C4', 'C4-ST': 'C4', 'C5': 'C5',
@@ -249,7 +272,7 @@ class ResourceManager:
                   'EX': 'EX', 'MD': 'MD', 'DB': 'DB', 'WV': 'WV'}
         for key, prefix in lf_map.items():
             for sfx in ('', '_2'):
-                path = fip(os.path.join(SUCAI_DIR, f"landfall_{prefix}{sfx}.png"))
+                path = fip(os.path.join(icon_dir, f"landfall_{prefix}{sfx}.png"))
                 if path:
                     try:
                         self.images[f"landfall_{key}{'_2' if sfx else '_1'}"] = \
@@ -258,7 +281,9 @@ class ResourceManager:
 
         for strength, suffix in {'C1': 'C1', 'C2': 'C2', 'C3': 'C3', 'C4': 'C4', 'C5': 'C5',
                                   'TS': 'TS', 'STS': 'TS', 'SS': 'SS', 'TD': 'TD', 'EX': 'EX', 'MD': 'MD'}.items():
-            path = os.path.join(SUCAI_DIR, f"sound.landfall.{suffix}.ogg")
+            path = os.path.join(icon_dir, f"sound.landfall.{suffix}.ogg")
+            if not os.path.exists(path):
+                path = os.path.join(SUCAI_DIR, f"sound.landfall.{suffix}.ogg")
             if os.path.exists(path):
                 try: self.sounds[strength] = pygame.mixer.Sound(path)
                 except Exception:

@@ -89,6 +89,7 @@ class TySimEventMixin:
             if my < self.map_height and not self.dialog_mgr.any_active():
                 self.right_button_dragging = True
                 self.right_drag_start_pos = (mx, my)
+                self.update_all_screen_points()
                 return True
         elif e.type == pygame.MOUSEBUTTONUP and e.button == 3:
             if self.right_button_dragging:

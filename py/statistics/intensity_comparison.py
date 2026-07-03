@@ -7,7 +7,7 @@ from typing import List, Tuple, Optional
 
 from ..constants import (
     f_s, f_m, f_l, rt, TXT, BUTTON_BORDER, BUTTON_BG, DIALOG_TITLE_BAR_HEIGHT,
-    DB, TD, TS, C1, C2, C3, C4, C5_L, C5_D, C2_MINUS, C3_MINUS, C4_ST, WV,
+    DB, TD, TS, C1, C2, C3, C4, C5_L, C5_M, C5_D, C2_MINUS, C3_MINUS, C4_ST, WV,
 )
 from ..dialog_base import DraggableDialog
 
@@ -54,6 +54,8 @@ class IntensityComparisonDialog(DraggableDialog):
         self._margin_r = 50
         self._margin_t = 50
         self._margin_b = 95
+        self._scroll_y: int = 0
+        self._content_h: int = 0
 
     # ═══════════════════════════════════════════════
     #  激活
@@ -85,18 +87,22 @@ class IntensityComparisonDialog(DraggableDialog):
 
     def _build(self):
         w = min(1700, self.sim.screen_width - 20)
-        h = min(820, self.sim.screen_height - 60)
+        content_h = min(820, self.sim.screen_height - 100)
+        self._content_h = 820
+        window_h = min(self._content_h, content_h)
         ox, oy = self.bg_rect.x, self.bg_rect.y
-        self.bg_rect = pygame.Rect(ox if ox > 0 else 0, oy if oy > 0 else 0, w, h)
+        self.bg_rect = pygame.Rect(ox if ox > 0 else 0, oy if oy > 0 else 0, w, window_h)
+        max_scroll = max(0, self._content_h - window_h)
+        self._scroll_y = max(0, min(self._scroll_y, max_scroll))
 
         ch_w = w - self._margin_l - self._margin_r
-        ch_h = h - self._margin_t - self._margin_b
+        ch_h = window_h - self._margin_t - self._margin_b
         chart_left = self._margin_l
         chart_top = self._margin_t
 
-        surf = pygame.Surface((w, h), pygame.SRCALPHA)
-        pygame.draw.rect(surf, _CHART_BG, (0, 0, w, h), 0, 10)
-        pygame.draw.rect(surf, _CHART_BORDER, (0, 0, w, h), 2, 10)
+        surf = pygame.Surface((w, self._content_h), pygame.SRCALPHA)
+        pygame.draw.rect(surf, _CHART_BG, (0, 0, w, self._content_h), 0, 10)
+        pygame.draw.rect(surf, _CHART_BORDER, (0, 0, w, self._content_h), 2, 10)
 
         # 标题
         title = rt(f_l, f"强度对比 — {self._year}", TXT)
@@ -118,7 +124,7 @@ class IntensityComparisonDialog(DraggableDialog):
             (0, 29, DB), (29, 34, TD), (34, 64, TS), (64, 83, C1),
             (83, 86, C2_MINUS), (86, 96, C2), (96, 105, C3_MINUS), (105, 113, C3),
             (113, 130, C4), (130, 137, C4_ST),
-            (137, 155, C5_L), (155, 170, (190, 96, 230)), (170, 999, C5_D),
+            (137, 155, C5_L), (155, 170, C5_M), (170, 999, C5_D),
         ]
         for y_lower, y_upper, color in fill_bands:
             if y_lower >= y_max:
@@ -255,18 +261,29 @@ class IntensityComparisonDialog(DraggableDialog):
     def draw(self, surface: pygame.Surface):
         if not self.active or self._cached_surf is None:
             return
-        surface.blit(self._cached_surf, (self.bg_rect.x, self.bg_rect.y))
+        bx, by = self.bg_rect.x, self.bg_rect.y
+        bw, bh = self.bg_rect.width, self.bg_rect.height
+        src_rect = pygame.Rect(0, self._scroll_y, bw, bh)
+        surface.blit(self._cached_surf, (bx, by), area=src_rect)
+
+        # 滚动条
+        if self._content_h > bh:
+            bar_h = max(20, int(bh * bh / self._content_h))
+            bar_y = by + int(self._scroll_y * bh / self._content_h)
+            pygame.draw.rect(surface, (160, 160, 160),
+                             pygame.Rect(bx + bw - 8, bar_y, 6, bar_h), border_radius=3)
 
         # 关闭按钮
-        bx, by = self.bg_rect.x, self.bg_rect.y
-        bw = self.bg_rect.width
         cb = pygame.Rect(bx + bw - 90, by + 8, 55, 25)
         self._close_btn_rect = cb
         self.draw_button(surface, cb, rt(f_s, "关闭", (255, 255, 255)))
 
         # 悬停提示
         mx, my = pygame.mouse.get_pos()
-        ox, oy = self.bg_rect.x, self.bg_rect.y
+        hover_rect = pygame.Rect(bx, by, bw, bh)
+        if not hover_rect.collidepoint(mx, my):
+            return
+        ox, oy = bx, by - self._scroll_y
         for r_local, info in self._hover_rects:
             r_global = r_local.move(ox, oy)
             if r_global.collidepoint(mx, my):
@@ -311,6 +328,12 @@ class IntensityComparisonDialog(DraggableDialog):
                 return True
 
         # 不拦截鼠标移动/滚轮（让底层可以处理）
-        if e.type in (pygame.MOUSEMOTION, pygame.MOUSEWHEEL):
+        if e.type == pygame.MOUSEMOTION:
+            return False
+        if e.type == pygame.MOUSEWHEEL:
+            if self._content_h > self.bg_rect.height:
+                max_scroll = self._content_h - self.bg_rect.height
+                self._scroll_y = max(0, min(max_scroll, self._scroll_y - e.y * 30))
+                return True
             return False
         return False

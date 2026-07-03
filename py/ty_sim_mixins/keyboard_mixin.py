@@ -25,13 +25,15 @@ class TySimKeyboardMixin:
         if self.md == self.MODE_EDIT and self.tys:
             self.edit_typhoon = self.tys[0]
 
-        if hasattr(self, 'season_ctrl'):
+        if hasattr(self, 'season_ctrl') and self.md == self.MODE_SEASON:
             sc = self.season_ctrl
             sc.reset_to_first_year()
             self.sty = sc.sty
             self.edy = sc.edy
             self._sync_season_state()
         self.update_all_screen_points()
+        if hasattr(self, '_panel'):
+            self._panel = None
         if self.dialog_mgr.point_list.active:
             self.dialog_mgr.point_list.deactivate()
         if self.dialog_mgr.new_typhoon_dialog.active:
@@ -282,8 +284,7 @@ class TySimKeyboardMixin:
                 self.ste = self._cached_season_ste
                 self.sy = self._cached_season_sy
                 self.csa = self._cached_season_csa
-                self.current_ace_year = self.get_ace_year(
-                    datetime(self.sy, int(self.st[0:2]), int(self.st[2:4]), int(self.st[4:6])))
+                self.current_ace_year = self.get_ace_year(self._season_dt())
             else:
                 self.st = "010100"
                 self.ste = 0
@@ -302,6 +303,20 @@ class TySimKeyboardMixin:
 
         self._config_needs_save = True
         self.save_config()
+
+    def _handle_click(self, pos):
+        cp = self.control_panel
+        speed_ratio = cp.hit_test_speed_bar(pos)
+        if speed_ratio is not None:
+            self.sp = round(self.mis + speed_ratio * (self.mas - self.mis), 1)
+            return True
+        btn_key = cp.hit_test(pos)
+        if btn_key is None:
+            return False
+        handler = getattr(self, f"_btn_{btn_key}", None)
+        if handler:
+            return handler()
+        return False
 
     def _btn_play(self) -> bool:
         self.pl = not self.pl

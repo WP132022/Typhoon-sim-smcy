@@ -15,7 +15,7 @@ from .constants import (
 )
 from .typhoon import Typhoon, TrackPoint
 from .utils import infer_strength_category, darken_color as _darken_color
-from .constants import DB, EX, TD, TS, STS, C1, C2, C3, C4, C5_L, C5_D, MD_COLOR, C2_MINUS, C3_MINUS, C4_ST, WV
+from .constants import DB, EX, TD, TS, STS, C1, C2, C3, C4, C5_L, C5_M, C5_D, MD_COLOR, C2_MINUS, C3_MINUS, C4_ST, WV
 
 if TYPE_CHECKING:
     from .resource_manager import ResourceManager, OceanArea
@@ -266,7 +266,7 @@ class DataRepository:
         self.tys[idx] = new_ty
         if self.edit_typhoon is ty:
             self.edit_typhoon = new_ty
-        if self.current_typhoon() is ty:
+        if self.cti == idx:
             self.cti = idx
         self._refresh_ace()
         if self._sim:
@@ -295,6 +295,8 @@ class DataRepository:
         return self.tys[self.cti] if self.tys and 0 <= self.cti < len(self.tys) else None
 
     def get_display_name(self, ty: Typhoon) -> str:
+        if self._sim:
+            return self._sim.get_display_name(ty)
         if ty.cust:
             return ty.cust
         if ty.sname:
@@ -320,51 +322,24 @@ class DataRepository:
     def darken_color(c: Tuple[int, ...], factor: float = 0.6) -> Tuple[int, ...]:
         return _darken_color(c, factor)
 
+    _COLOR_MAP = {
+        "DB": DB, "EX": EX, "TD": TD, "TS": TS, "STS": STS,
+        "C1": C1, "C2-": C2_MINUS, "C2": C2,
+        "C3-": C3_MINUS, "C3": C3, "C4": C4, "C4-ST": C4_ST,
+        "MD": MD_COLOR, "SD": (100, 150, 200),
+        "SS": (200, 150, 100), "LO": (150, 200, 100), "WV": WV,
+    }
+
     def get_point_color(self, wind: int, stype: str) -> Tuple[int, int, int]:
         cat = self.get_strength_category(wind, stype)
-        if cat == "DB":
-            return DB
-        elif cat == "EX":
-            return EX
-        elif cat == "TD":
-            return TD
-        elif cat == "TS":
-            return TS
-        elif cat == "STS":
-            return STS
-        elif cat == "C1":
-            return C1
-        elif cat == "C2-":
-            return C2_MINUS
-        elif cat == "C2":
-            return C2
-        elif cat == "C3-":
-            return C3_MINUS
-        elif cat == "C3":
-            return C3
-        elif cat == "C4":
-            return C4
-        elif cat == "C4-ST":
-            return C4_ST
-        elif cat == "C5":
+        if cat == "C5":
             if wind >= 170:
                 return C5_D
             elif wind >= 155:
                 ratio = (wind - 155) / 15.0
-                r = int(C5_L[0] + (C5_D[0] - C5_L[0]) * ratio)
-                g = int(C5_L[1] + (C5_D[1] - C5_L[1]) * ratio)
-                b = int(C5_L[2] + (C5_D[2] - C5_L[2]) * ratio)
+                r = int(C5_M[0] + (C5_D[0] - C5_M[0]) * ratio)
+                g = int(C5_M[1] + (C5_D[1] - C5_M[1]) * ratio)
+                b = int(C5_M[2] + (C5_D[2] - C5_M[2]) * ratio)
                 return (r, g, b)
-            else:
-                return C5_L
-        elif cat == "MD":
-            return MD_COLOR
-        elif cat == "SD":
-            return (100, 150, 200)
-        elif cat == "SS":
-            return (200, 150, 100)
-        elif cat == "LO":
-            return (150, 200, 100)
-        elif cat == "WV":
-            return WV
-        return TD
+            return C5_L
+        return self._COLOR_MAP.get(cat, TD)

@@ -86,4 +86,5 @@ class Renderer:
             color = (220, 30, 30)
         from .constants import f_s, rt  # noqa: F811
         fps_text = rt(f_s, f"FPS: {fps:.0f}", color)
-        surface.blit(fps_text, (8, self.sim.screen_height - 28))
+        x = self.sim.screen_width - fps_text.get_width() - 8
+        surface.blit(fps_text, (x, 8))

@@ -7,7 +7,7 @@ from typing import List, Tuple, Optional, Dict
 
 from ..constants import (
     f_s, f_m, f_l, rt, TXT, BUTTON_BORDER, BUTTON_BG, DIALOG_TITLE_BAR_HEIGHT,
-    DB, TD, TS, C1, C2, C3, C4, C5_L, C5_D, C2_MINUS, C3_MINUS, C4_ST, WV,
+    DB, TD, TS, C1, C2, C3, C4, C5_L, C5_M, C5_D, C2_MINUS, C3_MINUS, C4_ST, WV,
 )
 from ..dialog_base import DraggableDialog
 from .draw_helpers_chart import DASH_COLOR, draw_dashed_h, draw_dashed_v
@@ -48,7 +48,7 @@ _FILL_BANDS: List[Tuple[float, float, Tuple[int, int, int]]] = [
     (113, 130, C4),
     (130, 137, C4_ST),
     (137, 155, C5_L),
-    (155, 170, (190, 96, 230)),
+    (155, 170, C5_M),
     (170, 999, C5_D),
 ]
 
@@ -78,6 +78,8 @@ class IntensityChartDialog(DraggableDialog):
         self._color_btn_rect = pygame.Rect(0, 0, 0, 0)
         self._show_ace = True  # 是否显示ACE累计曲线
         self._ace_btn_rect = pygame.Rect(0, 0, 0, 0)
+        self._scroll_y: int = 0
+        self._content_h: int = 0
 
         self._margin_l = 75
         self._margin_r = 70
@@ -137,12 +139,16 @@ class IntensityChartDialog(DraggableDialog):
         old_x, old_y = self.bg_rect.x, self.bg_rect.y
 
         w = min(1500, self.sim.screen_width - 40)
-        h = min(780, self.sim.screen_height - 80)
+        content_h = min(780, self.sim.screen_height - 100)
+        self._content_h = 780  # 固有内容高度
+        window_h = min(self._content_h, content_h)
         self.bg_rect = pygame.Rect(old_x if old_x > 0 else 0,
-                                   old_y if old_y > 0 else 0, w, h)
+                                   old_y if old_y > 0 else 0, w, window_h)
+        max_scroll = max(0, self._content_h - window_h)
+        self._scroll_y = max(0, min(self._scroll_y, max_scroll))
 
         ch_w = w - self._margin_l - self._margin_r
-        ch_h = h - self._margin_t - self._margin_b
+        ch_h = ch - self._margin_t - self._margin_b
         chart_left = self._margin_l
         chart_top = self._margin_t
 
@@ -172,10 +178,11 @@ class IntensityChartDialog(DraggableDialog):
         max_ace = ace_cum_list[-1] if ace_cum_list else 1.0
         ace_max = max(max_ace * 1.1, 1.0)
 
-        # ── 预渲染 Surface ──
-        surf = pygame.Surface((w, h), pygame.SRCALPHA)
-        pygame.draw.rect(surf, _CHART_COLORS['BG'], (0, 0, w, h), 0, 10)
-        pygame.draw.rect(surf, _CHART_COLORS['BORDER'], (0, 0, w, h), 2, 10)
+        # ── 预渲染 Surface（使用内容高度而非窗口高度）──
+        ch = self._content_h
+        surf = pygame.Surface((w, ch), pygame.SRCALPHA)
+        pygame.draw.rect(surf, _CHART_COLORS['BG'], (0, 0, w, ch), 0, 10)
+        pygame.draw.rect(surf, _CHART_COLORS['BORDER'], (0, 0, w, ch), 2, 10)
 
         # 标题
         name = self.sim.get_display_name(ty)
@@ -397,11 +404,25 @@ class IntensityChartDialog(DraggableDialog):
         if self._cached_chart is None:
             self._build()
 
-        surface.blit(self._cached_chart, (self.bg_rect.x, self.bg_rect.y))
+        bx, by = self.bg_rect.x, self.bg_rect.y
+        bw, bh = self.bg_rect.width, self.bg_rect.height
+        # 裁剪并滚动
+        src_rect = pygame.Rect(0, self._scroll_y, bw, bh)
+        surface.blit(self._cached_chart, (bx, by), area=src_rect)
+
+        # 滚动条
+        if self._content_h > bh:
+            bar_h = max(20, int(bh * bh / self._content_h))
+            bar_y = by + int(self._scroll_y * bh / self._content_h)
+            pygame.draw.rect(surface, (160, 160, 160),
+                             pygame.Rect(bx + bw - 8, bar_y, 6, bar_h), border_radius=3)
 
         # ── 悬停信息 ──
         mx, my = pygame.mouse.get_pos()
-        offset_x, offset_y = self.bg_rect.x, self.bg_rect.y
+        hover_rect = pygame.Rect(bx, by, bw, bh)
+        if not hover_rect.collidepoint(mx, my):
+            return
+        offset_x, offset_y = bx, by - self._scroll_y
 
         # 优先 ACE 曲线悬停（点更小，更容易被强度点覆盖）
         for r_local, info in self._cached_ace_rects:
@@ -436,6 +457,14 @@ class IntensityChartDialog(DraggableDialog):
 
     def handle_event(self, e: pygame.event.Event) -> bool:
         if not self.active:
+            return False
+
+        # 滚轮滚动
+        if e.type == pygame.MOUSEWHEEL:
+            if self._content_h > self.bg_rect.height:
+                max_scroll = self._content_h - self.bg_rect.height
+                self._scroll_y = max(0, min(max_scroll, self._scroll_y - e.y * 30))
+                return True
             return False
 
         # ── 颜色按钮（必须在 handle_drag_event 之前检查，

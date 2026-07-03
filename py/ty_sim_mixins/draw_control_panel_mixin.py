@@ -10,7 +10,7 @@ class TySimDrawControlPanelMixin:
         from ..control_panel import ControlPanel
         if not hasattr(self, '_panel') or self._panel is None:
             self._panel = ControlPanel(self)
-            self._panel.build()
+        self._panel.build()
         self._panel.draw(surface)
 
     @property
@@ -18,5 +18,5 @@ class TySimDrawControlPanelMixin:
         if not hasattr(self, '_panel') or self._panel is None:
             from ..control_panel import ControlPanel
             self._panel = ControlPanel(self)
-            self._panel.build()
+        self._panel.build()
         return self._panel

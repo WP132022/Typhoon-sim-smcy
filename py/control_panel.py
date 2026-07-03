@@ -10,6 +10,9 @@ from .constants import (
     BUTTON_BORDER, BUTTON_BG, BUTTON_DISABLED,
     CONTROL_PANEL_BG, CONTROL_PANEL_LINE,
     SPEED_BAR_BG, SPEED_BAR_FILL,
+    SETTINGS_DARK_BG, SETTINGS_TAB_BG, SETTINGS_ACCENT,
+    SETTINGS_TEXT_LIGHT, SETTINGS_TEXT_DIM,
+    SETTINGS_TOGGLE_ON, SETTINGS_TOGGLE_OFF,
 )
 from .utils import lighten_color, darken_color
 
@@ -174,36 +177,48 @@ class ControlPanel:
     def draw(self, surface: pygame.Surface) -> None:
         cp_h = self.sim.control_panel_height
         py = self.sim.map_height
+        dark = getattr(self.sim, 'dark_mode', True)
 
-        pygame.draw.rect(surface, CONTROL_PANEL_BG,
-                         (0, py, self.sim.screen_width, cp_h))
-        pygame.draw.line(surface, CONTROL_PANEL_LINE,
-                         (0, py), (self.sim.screen_width, py), 2)
+        if dark:
+            pygame.draw.rect(surface, SETTINGS_DARK_BG[:3], (0, py, self.sim.screen_width, cp_h))
+            pygame.draw.line(surface, SETTINGS_TAB_BG,
+                             (0, py), (self.sim.screen_width, py), 2)
+        else:
+            pygame.draw.rect(surface, CONTROL_PANEL_BG,
+                             (0, py, self.sim.screen_width, cp_h))
+            pygame.draw.line(surface, CONTROL_PANEL_LINE,
+                             (0, py), (self.sim.screen_width, py), 2)
 
         for btn in self._buttons:
-            self._draw_button(surface, btn)
+            self._draw_button(surface, btn, dark)
 
         # 速度条
-        from .constants import f_s, rt, TXT
+        from .constants import f_s, rt
         by = self._by()
         sbx = self._speed_bar_x
-        speed_text = rt(f_s, f"\u901f\u5ea6: {self.sim.sp:.1f}x", TXT)
+        tc = SETTINGS_TEXT_LIGHT if dark else (20, 40, 80)
+        speed_text = rt(f_s, f"\u901f\u5ea6: {self.sim.sp:.1f}x", tc)
         surface.blit(speed_text, (sbx, by - 3))
         speed_bar_rect = pygame.Rect(sbx, by + 15, self.SPEED_BAR_W, self.SPEED_BAR_H)
-        pygame.draw.rect(surface, SPEED_BAR_BG, speed_bar_rect, 0, 6)
+        sb_bg = SETTINGS_TOGGLE_OFF if dark else SPEED_BAR_BG
+        sb_fill = SETTINGS_ACCENT if dark else SPEED_BAR_FILL
+        pygame.draw.rect(surface, sb_bg, speed_bar_rect, 0, 6)
         sr = (self.sim.sp - self.sim.mis) / (self.sim.mas - self.sim.mis)
         fw = int(self.SPEED_BAR_W * sr)
-        pygame.draw.rect(surface, SPEED_BAR_FILL,
+        pygame.draw.rect(surface, sb_fill,
                          (sbx, by + 15, fw, self.SPEED_BAR_H), 0, 6)
 
         # 模式描述
-        mode_texts = {"normal": self.sim.mode_desc_normal,
-                      "season": self.sim.mode_desc_season,
-                      "edit": self.sim.mode_desc_edit}
-        mode_desc = mode_texts.get(self.sim.md)
-        if mode_desc:
-            surface.blit(mode_desc, (
-                self.sim.screen_width // 2 - mode_desc.get_width() // 2,
+        mode_texts = {"normal": "模式: 正常",
+                      "season": "模式: 台风季",
+                      "edit": "模式: 编辑"}
+        mode_label = mode_texts.get(self.sim.md, "")
+        if mode_label:
+            from .constants import f_s as __f_s, rt as __rt
+            tc = SETTINGS_TEXT_LIGHT if dark else (20, 40, 80)
+            md_surf = __rt(__f_s, mode_label, tc)
+            surface.blit(md_surf, (
+                self.sim.screen_width // 2 - md_surf.get_width() // 2,
                 self.sim.screen_height - 30))
 
         # 脚本运行指示
@@ -218,7 +233,7 @@ class ControlPanel:
                     script_btn.y + 4))
 
     @staticmethod
-    def _draw_button(surface: pygame.Surface, btn: PanelButton) -> None:
+    def _draw_button(surface: pygame.Surface, btn: PanelButton, dark: bool = False) -> None:
         if not btn.visible or btn.text_surf is None:
             return
         r = btn.rect
@@ -227,13 +242,13 @@ class ControlPanel:
         pressed = hover and pygame.mouse.get_pressed()[0]
 
         if btn.disabled:
-            final_color = (150, 150, 150)
+            final_color = (100, 100, 110) if dark else (150, 150, 150)
         elif pressed:
             final_color = darken_color(btn.color, 0.8)
         elif hover:
-            final_color = lighten_color(btn.color, 1.2)
+            final_color = SETTINGS_TOGGLE_ON if dark else lighten_color(btn.color, 1.2)
         else:
-            final_color = btn.color
+            final_color = SETTINGS_TOGGLE_OFF if dark else btn.color
 
         pygame.draw.rect(surface, final_color, r, 0, 5)
         surface.blit(btn.text_surf, (

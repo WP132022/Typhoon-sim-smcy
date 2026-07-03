@@ -1,14 +1,21 @@
 ﻿# py/settings.py
-"""设置对话框（三页，经纬度方向后缀，ACE限制模式，洋区下拉框，洋区半球自动切换）。"""
+"""设置对话框（全屏暗色面板 + 顶部 Tab 导航）。"""
 from __future__ import annotations
 
 import re
 import pygame
 from .constants import (
-    f_s, f_m, rt, TXT, BUTTON_BORDER, BUTTON_DISABLED, BUTTON_BG,
+    f_s, f_m, rt, TXT,
     HEMISPHERE_NORTH, HEMISPHERE_SOUTH, LIST_BG, LIST_HL,
-    SETTINGS_WIDTH, SETTINGS_HEIGHT,
-    DIALOG_TITLE_BAR_HEIGHT
+    SETTINGS_DARK_BG, SETTINGS_DARK_OVERLAY, SETTINGS_ACCENT,
+    SETTINGS_TEXT_LIGHT, SETTINGS_TEXT_DIM,
+    SETTINGS_TAB_BG, SETTINGS_TAB_ACTIVE, SETTINGS_TAB_HOVER,
+    SETTINGS_INPUT_BG, SETTINGS_INPUT_BORDER,
+    SETTINGS_CHECKBOX_BG, SETTINGS_CHECKBOX_CHECK,
+    SETTINGS_TOGGLE_ON, SETTINGS_TOGGLE_OFF,
+    SETTINGS_TAB_NAMES,
+    DIALOG_CORNER_RADIUS,
+    ICON_SET_SIMPLE, ICON_SET_SMCY, ICON_SET_NAMES
 )
 from .input_field import InputField
 from .dialog_base import DraggableDialog
@@ -24,7 +31,9 @@ class Settings(DraggableDialog):
     def __init__(self, s):
         super().__init__(s)
         self._init_data()
-        self.current_page = 0
+        self.tab_index = 0
+        self._tab_indicator_x: float = 0.0
+        self._tab_indicator_target: float = 0.0
         self.fields: List[InputField] = []
         self.show_shortcuts = False
         self._needs_save = False
@@ -41,6 +50,7 @@ class Settings(DraggableDialog):
         self._shortcuts_rect = pygame.Rect(0, 0, 0, 0)
         self._shortcuts_btn_rect = pygame.Rect(0, 0, 0, 0)
         self._reload_btn_rect = pygame.Rect(0, 0, 0, 0)
+        self._targets: list = []  # [(rect, callback), ...]
         self._shortcuts_scroll_y = 0
         self._shortcuts_scrollbar_dragging = False
         self._shortcuts_scrollbar_drag_start_y = 0
@@ -81,6 +91,7 @@ class Settings(DraggableDialog):
         self.ace_interpolated = False
         self.show_fps = False
         self.basin_filter_enabled = True
+        self.icon_set = ICON_SET_SIMPLE
 
     @staticmethod
     def _parse_lon(text: str) -> Optional[float]:
@@ -132,63 +143,77 @@ class Settings(DraggableDialog):
         return key in ('mla', 'Mla') or key.endswith('_lat')
 
     def _pre_render_texts(self):
-        self.title = rt(f_m, "设置", TXT)
+        TX = SETTINGS_TEXT_LIGHT if self.dark_mode else TXT
+        TD = SETTINGS_TEXT_DIM if self.dark_mode else (100, 110, 130)
+        WT = (255, 255, 255)  # always white for button-like labels
+        self.title = rt(f_m, "设置", TX)
         self.page_indicator_template = "第 {}/3 页"
-        self.prev_text = rt(f_s, "上一页", (255, 255, 255))
-        self.next_text = rt(f_s, "下一页", (255, 255, 255))
-        self.confirm_text = rt(f_s, "确认", (255, 255, 255))
-        self.cancel_text = rt(f_s, "取消", (255, 255, 255))
-        self.shortcuts_text = rt(f_s, "快捷键", (255, 255, 255))
-        self.reload_text = rt(f_s, "重载数据", (255, 255, 255))
-        self.close_shortcuts_text = rt(f_s, "关闭", (255, 255, 255))
+        self.prev_text = rt(f_s, "上一页", TX)
+        self.next_text = rt(f_s, "下一页", TX)
+        self.confirm_text = rt(f_s, "确认", TX)
+        self.cancel_text = rt(f_s, "取消", TX)
+        self.shortcuts_text = rt(f_s, "快捷键", TX)
+        self.reload_text = rt(f_s, "重载数据", TX)
+        self.close_shortcuts_text = rt(f_s, "关闭", TX)
 
-        self.mis_label = rt(f_s, "最小速度:", TXT)
-        self.mas_label = rt(f_s, "最大速度:", TXT)
-        self.volume_label = rt(f_s, "音量 (%):", TXT)
-        self.main_rot_label = rt(f_s, "主图标转速因子:", TXT)
-        self.level3_rot_label = rt(f_s, "三级图标转速因子:", TXT)
-        self.point_size_text = rt(f_s, "台风路径点大小 (%):", TXT)
-        self.icon_size_text = rt(f_s, "台风图标大小 (%):", TXT)
-        self.sh_label = rt(f_s, "窗口高度:", TXT)
-        self.sw_label = rt(f_s, "窗口宽度:", TXT)
-        self.mlo_label = rt(f_s, "最西经度:", TXT)
-        self.Mlo_label = rt(f_s, "最东经度:", TXT)
-        self.mla_label = rt(f_s, "最南纬度:", TXT)
-        self.Mla_label = rt(f_s, "最北纬度:", TXT)
+        self.mis_label = rt(f_s, "最小速度:", TX)
+        self.mas_label = rt(f_s, "最大速度:", TX)
+        self.volume_label = rt(f_s, "音量 (%):", TX)
+        self.main_rot_label = rt(f_s, "主旋转速度:", TX)
+        self.level3_rot_label = rt(f_s, "3级旋转速度:", TX)
+        self.point_size_text = rt(f_s, "台风路径点大小 (%):", TX)
+        self.icon_size_text = rt(f_s, "台风图标大小 (%):", TX)
+        self.sh_label = rt(f_s, "窗口高度:", TX)
+        self.sw_label = rt(f_s, "窗口宽度:", TX)
+        self.mlo_label = rt(f_s, "最西经度:", TX)
+        self.Mlo_label = rt(f_s, "最东经度:", TX)
+        self.mla_label = rt(f_s, "最南纬度:", TX)
+        self.Mla_label = rt(f_s, "最北纬度:", TX)
         self.lonlat_note1 = rt(f_s, "注: 经度须加 E/W 后缀 (如 140W), 180 和 0 除外;",
-                               (100, 100, 100), 400)
-        self.lonlat_note2 = rt(f_s, "纬度须加 N/S 后缀 (如 35N), 0 除外.", (100, 100, 100), 400)
+                               TD, 400)
+        self.lonlat_note2 = rt(f_s, "纬度须加 N/S 后缀 (如 35N), 0 除外.", TD, 400)
 
-        self.hemisphere_label = rt(f_s, "半球:", TXT)
-        self.dpi_label = rt(f_s, "禁用DPI缩放 (需重启):", TXT)
-        self.auto_continue_text = rt(f_s, "正常模式台风播放完成后自动继续:", TXT)
-        self.normal_info_text = rt(f_s, "正常模式显示台风信息框:", TXT)
-        self.season_info_text = rt(f_s, "台风季模式显示台风信息框:", TXT)
-        self.fade_typhoon_text = rt(f_s, "台风图标平滑消失:", TXT)
-        self.fade_path_text = rt(f_s, "台风路径平滑消失:", TXT)
-        self.smooth_path_text = rt(f_s, "平滑路径 (Catmull-Rom):", TXT)
-        self.ace_interp_text = rt(f_s, "连续 ACE:", TXT)
-        self.fps_text = rt(f_s, "显示 FPS:", TXT)
-        self.ace_mode_text = rt(f_s, "ACE显示模式:", TXT)
-        self.orig_text = rt(f_s, "信息框样式", (255, 255, 255))
-        self.prog_text = rt(f_s, "进度条样式", (255, 255, 255))
-        self.name_mode_text = rt(f_s, "名称显示模式:", TXT)
+        self.hemisphere_label = rt(f_s, "半球:", TX)
+        self.dpi_label = rt(f_s, "禁用DPI缩放 (需重启):", TX)
+        self.auto_continue_text = rt(f_s, "正常模式台风播放完成后自动继续:", TX)
+        self.normal_info_text = rt(f_s, "正常模式显示台风信息框:", TX)
+        self.season_info_text = rt(f_s, "台风季模式显示台风信息框:", TX)
+        self.fade_typhoon_text = rt(f_s, "台风图标平滑消失:", TX)
+        self.fade_path_text = rt(f_s, "台风路径平滑消失:", TX)
+        self.fade_path_warn = rt(f_s, "影响性能较大,谨慎使用", (200, 80, 80), 400)
+        self.smooth_path_text = rt(f_s, "平滑路径:", TX)
+        self.ace_interp_text = rt(f_s, "连续 ACE:", TX)
+        self.fps_text = rt(f_s, "显示 FPS:", TX)
+        self.fix_icon_point_text = rt(f_s, "固定图标与路径点大小:", TX)
+        self.icon_set_text = rt(f_s, "台风图标:", TX)
+        self.icon_set_warn = rt(f_s, "SMCY图标影响性能较大,谨慎使用", (200, 80, 80), 400)
+        self.icon_set_modes = [
+            rt(f_s, ICON_SET_NAMES[ICON_SET_SIMPLE], TX),
+            rt(f_s, ICON_SET_NAMES[ICON_SET_SMCY], TX)
+        ]
+        self.ace_mode_text = rt(f_s, "ACE显示模式:", TX)
+        self.orig_text = rt(f_s, "信息框样式", TX)
+        self.prog_text = rt(f_s, "进度条样式", TX)
+        self.name_mode_text = rt(f_s, "名称显示模式:", TX)
         self.name_modes = [
-            rt(f_s, "年份+名称", (255, 255, 255)),
-            rt(f_s, "仅名称", (255, 255, 255)),
-            rt(f_s, "原方式", (255, 255, 255))
+            rt(f_s, "年份+名称", TX),
+            rt(f_s, "仅名称", TX),
+            rt(f_s, "原方式", TX)
         ]
         self.hemisphere_modes = [
-            rt(f_s, "北半球", (255, 255, 255)),
-            rt(f_s, "南半球", (255, 255, 255))
+            rt(f_s, "北半球", TX),
+            rt(f_s, "南半球", TX)
         ]
-        self.ace_limit_label = rt(f_s, "ACE地理限制:", TXT)
-        self.ace_limit_none_text = rt(f_s, "不启用", (255, 255, 255))
-        self.ace_limit_latlon_text = rt(f_s, "按经纬度", (255, 255, 255))
-        self.ace_limit_basin_text = rt(f_s, "按洋区", (255, 255, 255))
-        self.ace_limit_note = rt(f_s, "注: ACE将只计算指定区域内的官方报.", (100, 100, 100), 400)
-        self.basin_filter_text = rt(f_s, "启用洋区限制（仅加载/渲染进入过该洋区的台风）:", TXT)
-        self.basin_filter_note = rt(f_s, "（洋区与上方ACE限制洋区相同；关闭则加载全部台风）", (100, 100, 100), 400)
+        self.ace_limit_label = rt(f_s, "ACE地理限制:", TX)
+        self.ace_limit_none_text = rt(f_s, "不启用", TX)
+        self.ace_limit_latlon_text = rt(f_s, "按经纬度", TX)
+        self.ace_limit_basin_text = rt(f_s, "按洋区", TX)
+        self.ace_limit_note = rt(f_s, "注: ACE将只计算指定区域内的官方报.", TD, 400)
+        self.basin_filter_text = rt(f_s, "启用洋区限制（仅加载/渲染进入过该洋区的台风）:", TX)
+        self.basin_filter_note = rt(f_s, "（洋区与上方ACE限制洋区相同；关闭则加载全部台风）", TD, 400)
+
+    def _refresh_texts(self):
+        self._pre_render_texts()
 
     def activate(self):
         super().activate()
@@ -217,6 +242,7 @@ class Settings(DraggableDialog):
         self.hemisphere = self.sim.hemisphere
         self.point_size = self.sim.point_size
         self.icon_size = self.sim.icon_size
+        self.fix_icon_point_size = self.sim.fix_icon_point_size
         self.disable_dpi_scaling = self.sim.disable_dpi_scaling
         self.fade_typhoon = self.sim.fade_typhoon
         self.fade_path = self.sim.fade_path
@@ -224,7 +250,11 @@ class Settings(DraggableDialog):
         self.ace_interpolated = self.sim.ace_interpolated
         self.show_fps = self.sim.show_fps
         self.basin_filter_enabled = getattr(self.sim, 'basin_filter_enabled', True)
-        self.current_page = 0
+        self.icon_set = getattr(self.sim, 'icon_set', ICON_SET_SIMPLE)
+        if not hasattr(self, 'tab_index') or self.tab_index < 0:
+            self.tab_index = 0
+        self._tab_indicator_x = 0.0
+        self._tab_indicator_target = 0.0
         self.show_shortcuts = False
         self._needs_save = False
         self._ace_changed = False
@@ -232,6 +262,7 @@ class Settings(DraggableDialog):
         self._basin_scroll_offset = 0
         self._build_basin_list()
         self._update_bg_rect()
+        self._refresh_texts()
         self.rebuild_fields()
 
     def _build_basin_list(self):
@@ -249,10 +280,11 @@ class Settings(DraggableDialog):
         self._basin_dropdown_open = False
 
     def _update_bg_rect(self):
-        dw, dh = SETTINGS_WIDTH, SETTINGS_HEIGHT
-        dx = (self.sim.screen_width - dw) // 2
-        dy = (self.sim.screen_height - dh) // 2
-        self.bg_rect = pygame.Rect(dx, dy, dw, dh)
+        w = min(680, self.sim.screen_width - 40)
+        h = min(620, self.sim.screen_height - 60)
+        dx = (self.sim.screen_width - w) // 2
+        dy = (self.sim.screen_height - h) // 2
+        self.bg_rect = pygame.Rect(dx, dy, w, h)
 
     def _sync_field_positions(self):
         if not self.fields or not self._field_offsets:
@@ -276,37 +308,47 @@ class Settings(DraggableDialog):
 
     def _get_fields_config(self):
         dx, dy = self.bg_rect.x, self.bg_rect.y
-        FIELD_W, FIELD_H = 80, 24
-        COL_X = dx + 230
+        FIELD_W, FIELD_H = 70, 22
+        COL_X = dx + 200
         lonlat_val = self.validate_lonlat
-        if self.current_page == 0:
+        y0 = dy + 95
+        y1 = y0 + 30; y2 = y1 + 30; y3 = y2 + 30; y4 = y3 + 30; y5 = y4 + 30
+        if self.tab_index == 0:  # 通用
             return [
-                ("mis", f"{self.mis:.1f}", (COL_X, dy + 70 - 2, FIELD_W, FIELD_H), self.validate_float),
-                ("mas", f"{self.mas:.1f}", (COL_X, dy + 100 - 2, FIELD_W, FIELD_H), self.validate_float),
-                ("volume", f"{int(self.volume*100)}", (COL_X, dy + 130 - 2, FIELD_W, FIELD_H), self.validate_int),
-                ("main_rot_speed", f"{self.main_rot_speed:.2f}", (COL_X, dy + 160 - 2, FIELD_W, FIELD_H), self.validate_float),
-                ("level3_rot_speed", f"{self.level3_rot_speed:.2f}", (COL_X, dy + 190 - 2, FIELD_W, FIELD_H), self.validate_float),
-                ("point_size", f"{self.point_size}", (COL_X, dy + 220 - 2, FIELD_W, FIELD_H), self.validate_int),
-                ("icon_size", f"{self.icon_size}", (COL_X, dy + 250 - 2, FIELD_W, FIELD_H), self.validate_int),
-                ("screen_height", f"{self.screen_height}", (COL_X, dy + 290 - 2, FIELD_W, FIELD_H), self.validate_int),
-                ("screen_width", f"{self.screen_width}", (COL_X, dy + 320 - 2, FIELD_W, FIELD_H), self.validate_int),
-                ("mlo", lon_to_display(self.mlo), (COL_X, dy + 360 - 2, FIELD_W, FIELD_H), lonlat_val),
-                ("Mlo", lon_to_display(self.Mlo), (COL_X, dy + 390 - 2, FIELD_W, FIELD_H), lonlat_val),
-                ("mla", lat_to_display(self.mla), (COL_X, dy + 420 - 2, FIELD_W, FIELD_H), lonlat_val),
-                ("Mla", lat_to_display(self.Mla), (COL_X, dy + 450 - 2, FIELD_W, FIELD_H), lonlat_val),
+                ("mis", f"{self.mis:.1f}", (COL_X, y0, FIELD_W, FIELD_H), self.validate_float),
+                ("mas", f"{self.mas:.1f}", (COL_X, y1, FIELD_W, FIELD_H), self.validate_float),
+                ("volume", f"{int(self.volume*100)}", (COL_X, y2, FIELD_W, FIELD_H), self.validate_int),
+                ("main_rot_speed", f"{self.main_rot_speed:.2f}", (COL_X, y3, FIELD_W, FIELD_H), self.validate_float),
+                ("level3_rot_speed", f"{self.level3_rot_speed:.2f}", (COL_X, y4, FIELD_W, FIELD_H), self.validate_float),
             ]
-        elif self.current_page == 1:
+        elif self.tab_index == 1:  # 显示
+            return [
+                ("point_size", f"{self.point_size}", (COL_X, y0, FIELD_W, FIELD_H), self.validate_int),
+                ("icon_size", f"{self.icon_size}", (COL_X, y1, FIELD_W, FIELD_H), self.validate_int),
+                ("screen_height", f"{self.screen_height}", (COL_X, y2, FIELD_W, FIELD_H), self.validate_int),
+                ("screen_width", f"{self.screen_width}", (COL_X, y3, FIELD_W, FIELD_H), self.validate_int),
+            ]
+        elif self.tab_index == 2:  # 地图
+            return [
+                ("mlo", lon_to_display(self.mlo), (COL_X, y0, FIELD_W, FIELD_H), lonlat_val),
+                ("Mlo", lon_to_display(self.Mlo), (COL_X, y1, FIELD_W, FIELD_H), lonlat_val),
+                ("mla", lat_to_display(self.mla), (COL_X, y2, FIELD_W, FIELD_H), lonlat_val),
+                ("Mla", lat_to_display(self.Mla), (COL_X, y3, FIELD_W, FIELD_H), lonlat_val),
+            ]
+        elif self.tab_index == 3:  # 播放
             return []
-        else:
+        elif self.tab_index == 4:  # ACE
             config = []
             if self.ace_limit_mode == ACE_LIMIT_LATLON:
                 config = [
-                    ("ace_min_lon", lon_to_display(self.ace_min_lon), (COL_X, dy + 110 - 2, FIELD_W, FIELD_H), lonlat_val),
-                    ("ace_max_lon", lon_to_display(self.ace_max_lon), (COL_X, dy + 140 - 2, FIELD_W, FIELD_H), lonlat_val),
-                    ("ace_min_lat", lat_to_display(self.ace_min_lat), (COL_X, dy + 170 - 2, FIELD_W, FIELD_H), lonlat_val),
-                    ("ace_max_lat", lat_to_display(self.ace_max_lat), (COL_X, dy + 200 - 2, FIELD_W, FIELD_H), lonlat_val),
+                    ("ace_min_lon", lon_to_display(self.ace_min_lon), (COL_X, y0, FIELD_W, FIELD_H), lonlat_val),
+                    ("ace_max_lon", lon_to_display(self.ace_max_lon), (COL_X, y1, FIELD_W, FIELD_H), lonlat_val),
+                    ("ace_min_lat", lat_to_display(self.ace_min_lat), (COL_X, y2, FIELD_W, FIELD_H), lonlat_val),
+                    ("ace_max_lat", lat_to_display(self.ace_max_lat), (COL_X, y3, FIELD_W, FIELD_H), lonlat_val),
                 ]
             return config
+        else:  # 数据
+            return []
 
     @staticmethod
     def validate_float(char: str) -> bool:
@@ -323,43 +365,249 @@ class Settings(DraggableDialog):
     def draw(self, surface: pygame.Surface):
         if not self.active:
             return
-        self.draw_background(surface, self.bg_rect)
-        self.draw_title(surface, self.title, self.bg_rect, y_offset=12)
-        dx, dy, dw, dh = self.bg_rect
-        page_text = self.page_indicator_template.format(self.current_page + 1)
-        page_surf = rt(f_s, page_text, TXT)
-        surface.blit(page_surf, (dx + dw // 2 - page_surf.get_width() // 2, dy + 50))
-
-        if self.current_page == 0:
-            self.draw_page1(surface, dx, dy)
-        elif self.current_page == 1:
-            self.draw_page2(surface, dx, dy)
+        self._targets.clear()
+        if self.dark_mode:
+            ov = pygame.Surface((self.sim.screen_width, self.sim.screen_height), pygame.SRCALPHA)
+            ov.fill(SETTINGS_DARK_OVERLAY)
+            surface.blit(ov, (0, 0))
+            panel_bg = SETTINGS_DARK_BG
+            text_color = SETTINGS_TEXT_LIGHT
         else:
-            self.draw_page3(surface, dx, dy)
+            # 亮色模式
+            bg_rect_surf = pygame.Surface((self.sim.screen_width, self.sim.screen_height), pygame.SRCALPHA)
+            bg_rect_surf.fill((0, 0, 0, 60))
+            surface.blit(bg_rect_surf, (0, 0))
+            panel_bg = (240, 245, 255, 235)
+            text_color = TXT
+
+        dx, dy, dw, dh = self.bg_rect
+        panel = pygame.Surface((dw, dh), pygame.SRCALPHA)
+        pygame.draw.rect(panel, panel_bg, (0, 0, dw, dh), border_radius=DIALOG_CORNER_RADIUS)
+        surface.blit(panel, (dx, dy))
+
+        title = rt(f_m, "设置", text_color)
+        surface.blit(title, (dx + 20, dy + 12))
+
+        mx, my = pygame.mouse.get_pos()
+        btn_w, btn_h = 60, 26
+        close_rect = pygame.Rect(dx + dw - btn_w - 12, dy + 8, btn_w, btn_h)
+        self._add_target(close_rect, lambda: self._on_close())
+        self._draw_modern_button(surface, close_rect, "关闭", hover=close_rect.collidepoint(mx, my), accent=False, dark=self.dark_mode)
+        ok_rect = pygame.Rect(dx + dw - btn_w*2 - 20, dy + 8, btn_w, btn_h)
+        self._add_target(ok_rect, lambda: self._on_ok())
+        self._draw_modern_button(surface, ok_rect, "确认", hover=ok_rect.collidepoint(mx, my), accent=True, dark=self.dark_mode)
+
+        sc_rect = pygame.Rect(dx + dw - 210, dy + 8, 56, 22)
+        self._add_target(sc_rect, lambda: setattr(self, 'show_shortcuts', not self.show_shortcuts))
+        self._draw_modern_button(surface, sc_rect, "快捷键", hover=sc_rect.collidepoint(mx, my), accent=False, dark=self.dark_mode)
+        rl_rect = pygame.Rect(dx + dw - 148, dy + 8, 70, 22)
+        self._add_target(rl_rect, lambda: (self.sim.reload_typhoons(), self.sim.save_config()))
+        self._draw_modern_button(surface, rl_rect, "重载数据", hover=rl_rect.collidepoint(mx, my), accent=False, dark=self.dark_mode)
+        self._shortcuts_btn_rect = sc_rect
+        self._reload_btn_rect = rl_rect
+
+        # Tab 导航栏
+        tab_y = dy + 40
+        tab_area_h = 38
+        if self.dark_mode:
+            pygame.draw.rect(surface, SETTINGS_TAB_BG, (dx, tab_y, dw, tab_area_h))
+        else:
+            pygame.draw.rect(surface, (220, 225, 235), (dx, tab_y, dw, tab_area_h))
+        tabs = SETTINGS_TAB_NAMES
+        tab_w = (dw - 10) // len(tabs)
+        tab_rects = []
+        for i, name in enumerate(tabs):
+            tx = dx + 5 + i * tab_w
+            tr = pygame.Rect(tx, tab_y + 1, tab_w - 2, tab_area_h - 2)
+            tab_rects.append(tr)
+            active = i == self.tab_index
+            color = SETTINGS_ACCENT if active else (SETTINGS_TEXT_DIM if self.dark_mode else (100, 110, 130))
+            if tr.collidepoint(mx, my) and not active:
+                color = text_color
+            lb = rt(f_s, name, color)
+            surface.blit(lb, (tr.x + (tr.w - lb.get_width()) // 2, tr.y + (tr.h - lb.get_height()) // 2))
+        target_x = float(tab_rects[self.tab_index].x + 4)
+        self._tab_indicator_x += (target_x - self._tab_indicator_x) * 0.3
+        if abs(self._tab_indicator_x - target_x) < 0.5:
+            self._tab_indicator_x = target_x
+        ind_w = tab_w - 10
+        ind = pygame.Rect(int(self._tab_indicator_x), tab_y + tab_area_h - 3, ind_w, 3)
+        pygame.draw.rect(surface, SETTINGS_ACCENT, ind, border_radius=2)
+
+        # 内容区域
+        content_top = tab_y + tab_area_h + 8
+        content_h = dy + dh - content_top - 40
+        old_clip = surface.get_clip()
+        surface.set_clip(pygame.Rect(dx + 4, content_top, dw - 8, content_h))
+
+        if self.tab_index == 0:
+            self._draw_tab_general(surface, dx, dy, content_top, mx, my)
+        elif self.tab_index == 1:
+            self._draw_tab_display(surface, dx, dy, content_top, mx, my)
+        elif self.tab_index == 2:
+            self._draw_tab_map(surface, dx, dy, content_top, mx, my)
+        elif self.tab_index == 3:
+            self._draw_tab_playback(surface, dx, dy, content_top, mx, my)
+        elif self.tab_index == 4:
+            self._draw_tab_ace(surface, dx, dy, content_top, mx, my)
+        else:
+            self._draw_tab_data(surface, dx, dy, content_top, mx, my)
+
+        surface.set_clip(old_clip)
 
         for field in self.fields:
             field.draw(surface)
 
-        btn_y = dy + dh - 55
-        mx, my = pygame.mouse.get_pos()
-        if self.current_page > 0:
-            rect = pygame.Rect(dx + 80, btn_y, 80, 30)
-            self.draw_button(surface, rect, rt(f_s, "上一页", (255, 255, 255)),
-                           style='light', hover=rect.collidepoint(mx, my))
-        if self.current_page < 2:
-            rect = pygame.Rect(dx + 170, btn_y, 80, 30)
-            self.draw_button(surface, rect, rt(f_s, "下一页", (255, 255, 255)),
-                           style='light', hover=rect.collidepoint(mx, my))
-        rect = pygame.Rect(dx + 260, btn_y, 80, 30)
-        self.draw_button(surface, rect, rt(f_s, "确认", (255, 255, 255)),
-                       style='primary', hover=rect.collidepoint(mx, my))
-        rect = pygame.Rect(dx + 350, btn_y, 80, 30)
-        self.draw_button(surface, rect, rt(f_s, "取消", (255, 255, 255)),
-                       style='light', hover=rect.collidepoint(mx, my))
-
-        self.draw_shortcuts_btn(surface, dx, dy, dw)
         if self.show_shortcuts:
             self.draw_shortcuts_help(surface)
+
+    def _draw_modern_button(self, surface, rect, text, hover=False, accent=False, dark=True):
+        if accent:
+            bg = SETTINGS_ACCENT
+            tc = (20, 25, 35)
+        elif dark:
+            bg = SETTINGS_TOGGLE_ON if hover else SETTINGS_TOGGLE_OFF
+            tc = SETTINGS_TEXT_LIGHT if hover else SETTINGS_TEXT_DIM
+        else:
+            bg = (100, 150, 200) if hover else (180, 190, 210)
+            tc = (255, 255, 255) if hover else (60, 70, 90)
+        pygame.draw.rect(surface, bg, rect, border_radius=6)
+        if isinstance(text, str):
+            ts = rt(f_s, text, tc)
+        else:
+            ts = text
+        surface.blit(ts, (rect.x + (rect.w - ts.get_width()) // 2, rect.y + (rect.h - ts.get_height()) // 2))
+
+    def _add_target(self, rect, cb):
+        self._targets.append((rect, cb))
+
+    def _cb(self, surface, x, y, checked, attr):
+        """绘制复选框并自动记录点击目标。"""
+        self._add_target(pygame.Rect(x, y, 16, 16), lambda a=attr: setattr(self, a, not getattr(self, a)))
+        self._draw_cb(surface, x, y, checked)
+
+    def _tg(self, surface, rect, label, on, cb):
+        """绘制切换按钮并自动记录点击目标。"""
+        self._add_target(rect, cb)
+        bg = SETTINGS_ACCENT if on else SETTINGS_TOGGLE_OFF
+        tc = (20, 25, 35) if on else SETTINGS_TEXT_DIM
+        pygame.draw.rect(surface, bg, rect, border_radius=6)
+        if isinstance(label, str):
+            ts = rt(f_s, label, tc)
+        else:
+            ts = label
+        surface.blit(ts, (rect.x + (rect.w - ts.get_width()) // 2, rect.y + (rect.h - ts.get_height()) // 2))
+
+    def _draw_cb(self, surface, x, y, checked):
+        b = pygame.Rect(x, y, 16, 16)
+        pygame.draw.rect(surface, SETTINGS_CHECKBOX_BG, b, border_radius=3)
+        pygame.draw.rect(surface, SETTINGS_INPUT_BORDER, b, 1, border_radius=3)
+        if checked:
+            inner = pygame.Rect(x + 3, y + 3, 10, 10)
+            pygame.draw.rect(surface, SETTINGS_CHECKBOX_CHECK, inner, border_radius=2)
+
+    def _draw_toggle_btns(self, surface, x, y, labels, active_idx):
+        btn_w = 90
+        for i, label in enumerate(labels):
+            rx = x + i * (btn_w + 4)
+            b = pygame.Rect(rx, y, btn_w, 22)
+            on = i == active_idx
+            bg = SETTINGS_ACCENT if on else SETTINGS_TOGGLE_OFF
+            tc = (20, 25, 35) if on else SETTINGS_TEXT_DIM
+            pygame.draw.rect(surface, bg, b, border_radius=6)
+            lb = rt(f_s, label, tc)
+            surface.blit(lb, (b.x + (b.w - lb.get_width()) // 2, b.y + (b.h - lb.get_height()) // 2))
+            yield b
+
+    # ── Tab 内容 ──
+
+    def _draw_tab_general(self, surface, dx, dy, top_y, mx, my):
+        y = top_y + 5
+        surface.blit(self.mis_label, (dx + 30, y + 3))
+        surface.blit(self.mas_label, (dx + 30, y + 33))
+        surface.blit(self.volume_label, (dx + 30, y + 63))
+        surface.blit(self.main_rot_label, (dx + 30, y + 93))
+        surface.blit(self.level3_rot_label, (dx + 30, y + 123))
+
+    def _draw_tab_display(self, surface, dx, dy, top_y, mx, my):
+        y = top_y + 5
+        surface.blit(self.point_size_text, (dx + 30, y + 3))
+        surface.blit(self.icon_size_text, (dx + 30, y + 33))
+        surface.blit(self.sh_label, (dx + 30, y + 63))
+        surface.blit(self.sw_label, (dx + 30, y + 93))
+        surface.blit(self.fix_icon_point_text, (dx + 30, y + 133))
+        self._cb(surface, dx + 230, y + 133, self.fix_icon_point_size, 'fix_icon_point_size')
+        dm_text = rt(f_s, "暗色模式:", SETTINGS_TEXT_LIGHT if self.dark_mode else TXT)
+        surface.blit(dm_text, (dx + 30, y + 160))
+        self._add_target(pygame.Rect(dx + 230, y + 160, 16, 16), lambda: (setattr(self.sim, 'dark_mode', not self.sim.dark_mode), self._refresh_texts()))
+        self._draw_cb(surface, dx + 230, y + 160, self.dark_mode)
+
+    def _draw_tab_map(self, surface, dx, dy, top_y, mx, my):
+        y = top_y + 5
+        surface.blit(self.mlo_label, (dx + 30, y + 3))
+        surface.blit(self.Mlo_label, (dx + 30, y + 33))
+        surface.blit(self.mla_label, (dx + 30, y + 63))
+        surface.blit(self.Mla_label, (dx + 30, y + 93))
+        surface.blit(self.lonlat_note1, (dx + 30, y + 130))
+        surface.blit(self.lonlat_note2, (dx + 30, y + 148))
+
+    def _draw_tab_playback(self, surface, dx, dy, top_y, mx, my):
+        y = top_y + 5
+        gap = 30
+        surface.blit(self.hemisphere_label, (dx + 30, y))
+        for i, mode in enumerate(self.hemisphere_modes):
+            r = pygame.Rect(dx + 120 + i * 100, y - 4, 80, 22)
+            cb = (lambda h=HEMISPHERE_NORTH if i == 0 else HEMISPHERE_SOUTH: (setattr(self, 'hemisphere', h), setattr(self, '_ace_changed', True)))
+            self._tg(surface, r, mode, self.hemisphere == (HEMISPHERE_NORTH if i == 0 else HEMISPHERE_SOUTH), cb)
+
+        for idx, (attr, y_off) in enumerate([
+            ('disable_dpi_scaling', gap), ('ac', gap*2),
+            ('show_info_box_normal', gap*3), ('show_info_box_season', gap*4),
+            ('fade_typhoon', gap*5), ('fade_path', gap*6),
+        ]):
+            surface.blit(getattr(self, {'disable_dpi_scaling': 'dpi_label', 'ac': 'auto_continue_text',
+                'show_info_box_normal': 'normal_info_text', 'show_info_box_season': 'season_info_text',
+                'fade_typhoon': 'fade_typhoon_text', 'fade_path': 'fade_path_text'}[attr]), (dx + 30, y + y_off))
+            self._cb(surface, dx + self.bg_rect.width - 50, y + y_off, getattr(self, attr), attr)
+        surface.blit(self.fade_path_warn, (dx + 30, y + gap * 6 + 16))
+
+        for attr, y_off in [('smooth_path', gap*7+10), ('ace_interpolated', gap*8+10), ('show_fps', gap*9+10)]:
+            surface.blit(getattr(self, {'smooth_path':'smooth_path_text','ace_interpolated':'ace_interp_text','show_fps':'fps_text'}[attr]), (dx + 30, y + y_off))
+            self._cb(surface, dx + self.bg_rect.width - 50, y + y_off, getattr(self, attr), attr)
+
+    def _draw_tab_ace(self, surface, dx, dy, top_y, mx, my):
+        y = top_y + 5
+        surface.blit(self.ace_limit_label, (dx + 30, y))
+        modes = [ACE_LIMIT_NONE, ACE_LIMIT_LATLON, ACE_LIMIT_BASIN]
+        texts = [self.ace_limit_none_text, self.ace_limit_latlon_text, self.ace_limit_basin_text]
+        for i, (mode, txt) in enumerate(zip(modes, texts)):
+            r = pygame.Rect(dx + 140 + i * 105, y - 4, 95, 22)
+            self._tg(surface, r, txt, mode == self.ace_limit_mode, lambda m=mode: (setattr(self, 'ace_limit_mode', m), setattr(self, '_ace_changed', True), self.rebuild_fields()))
+        surface.blit(self.ace_limit_note, (dx + 30, y + 30))
+        if self.ace_limit_mode == ACE_LIMIT_BASIN:
+            surface.blit(self.basin_filter_text, (dx + 30, y + 60))
+            self._cb(surface, dx + self.bg_rect.width - 50, y + 60, self.basin_filter_enabled, 'basin_filter_enabled')
+            surface.blit(self.basin_filter_note, (dx + 30, y + 78))
+
+    def _draw_tab_data(self, surface, dx, dy, top_y, mx, my):
+        y = top_y + 5
+        surface.blit(self.icon_set_text, (dx + 30, y))
+        for i, mode in enumerate(self.icon_set_modes):
+            r = pygame.Rect(dx + 150 + i * 120, y - 4, 110, 22)
+            s = ICON_SET_SIMPLE if i == 0 else ICON_SET_SMCY
+            self._tg(surface, r, mode, self.icon_set == s, lambda s2=s: setattr(self, 'icon_set', s2))
+        surface.blit(self.icon_set_warn, (dx + 30, y + 26))
+
+        surface.blit(self.ace_mode_text, (dx + 30, y + 60))
+        for i, mode in enumerate(["original", "progress_bar"]):
+            txt = self.orig_text if i == 0 else self.prog_text
+            r = pygame.Rect(dx + 180 + i * 110, y + 56, 100, 22)
+            self._tg(surface, r, txt, self.ace_display_mode == mode, lambda m=mode: setattr(self, 'ace_display_mode', m))
+
+        surface.blit(self.name_mode_text, (dx + 30, y + 100))
+        for i, mode in enumerate(self.name_modes):
+            r = pygame.Rect(dx + 150 + i * 120, y + 96, 100, 22)
+            self._tg(surface, r, mode, self.name_display_mode == i, lambda idx=i: setattr(self, 'name_display_mode', idx))
 
     def draw_shortcuts_btn(self, surface, dx, dy, dw):
         btn_x = dx + dw - 200
@@ -419,26 +667,37 @@ class Settings(DraggableDialog):
 
         surface.blit(self.fade_path_text, (dx + 40, dy + 260))
         self._draw_checkbox(surface, dx + 370, dy + 260, self.fade_path)
+        surface.blit(self.fade_path_warn, (dx + 40, dy + 280))
 
-        surface.blit(self.smooth_path_text, (dx + 40, dy + 290))
-        self._draw_checkbox(surface, dx + 370, dy + 290, self.smooth_path)
+        surface.blit(self.smooth_path_text, (dx + 40, dy + 310))
+        self._draw_checkbox(surface, dx + 370, dy + 310, self.smooth_path)
 
-        surface.blit(self.ace_interp_text, (dx + 40, dy + 320))
-        self._draw_checkbox(surface, dx + 370, dy + 320, self.ace_interpolated)
+        surface.blit(self.ace_interp_text, (dx + 40, dy + 340))
+        self._draw_checkbox(surface, dx + 370, dy + 340, self.ace_interpolated)
 
-        surface.blit(self.fps_text, (dx + 40, dy + 350))
-        self._draw_checkbox(surface, dx + 370, dy + 350, self.show_fps)
+        surface.blit(self.fps_text, (dx + 40, dy + 370))
+        self._draw_checkbox(surface, dx + 370, dy + 370, self.show_fps)
 
-        surface.blit(self.ace_mode_text, (dx + 40, dy + 390))
-        ace_orig = pygame.Rect(dx + 150, dy + 385, 100, 25)
-        ace_prog = pygame.Rect(dx + 260, dy + 385, 100, 25)
+        surface.blit(self.fix_icon_point_text, (dx + 40, dy + 400))
+        self._draw_checkbox(surface, dx + 370, dy + 400, self.fix_icon_point_size)
+
+        surface.blit(self.ace_mode_text, (dx + 40, dy + 440))
+        ace_orig = pygame.Rect(dx + 150, dy + 435, 100, 25)
+        ace_prog = pygame.Rect(dx + 260, dy + 435, 100, 25)
         self._draw_toggle_button(surface, ace_orig, self.orig_text, self.ace_display_mode == "original")
         self._draw_toggle_button(surface, ace_prog, self.prog_text, self.ace_display_mode == "progress_bar")
 
-        surface.blit(self.name_mode_text, (dx + 40, dy + 420))
+        surface.blit(self.name_mode_text, (dx + 40, dy + 470))
         for i, mode in enumerate(self.name_modes):
-            rect = pygame.Rect(dx + 150 + i * 120, dy + 415, 100, 25)
+            rect = pygame.Rect(dx + 150 + i * 120, dy + 465, 100, 25)
             self._draw_toggle_button(surface, rect, mode, self.name_display_mode == i)
+
+        surface.blit(self.icon_set_text, (dx + 40, dy + 510))
+        for i, mode in enumerate(self.icon_set_modes):
+            rect = pygame.Rect(dx + 120 + i * 120, dy + 505, 110, 25)
+            self._draw_toggle_button(surface, rect, mode,
+                                      self.icon_set == (ICON_SET_SIMPLE if i == 0 else ICON_SET_SMCY))
+        surface.blit(self.icon_set_warn, (dx + 40, dy + 530))
 
     def draw_page3(self, surface, dx, dy):
         surface.blit(self.ace_limit_label, (dx + 40, dy + 70))
@@ -852,88 +1111,25 @@ class Settings(DraggableDialog):
                     self.current_field = nxt
                 return True
         if e.type == pygame.MOUSEBUTTONDOWN and e.button == 1:
-            dx, dy, dw, dh = self.bg_rect
             x, y = e.pos
-            btn_y = dy + dh - 55
-            if self.current_page > 0 and pygame.Rect(dx + 80, btn_y, 80, 30).collidepoint(x, y):
-                self.current_page -= 1
-                self.rebuild_fields()
-                return True
-            if self.current_page < 2 and pygame.Rect(dx + 170, btn_y, 80, 30).collidepoint(x, y):
-                self.current_page += 1
-                self.rebuild_fields()
-                return True
-            if pygame.Rect(dx + 260, btn_y, 80, 30).collidepoint(x, y):
-                self._needs_save = True
-                self.deactivate()
-                return True
-            if pygame.Rect(dx + 350, btn_y, 80, 30).collidepoint(x, y):
-                self.deactivate()
-                return True
-
-            if self.current_page == 1:
-                for i in range(2):
-                    if pygame.Rect(dx + 120 + i * 100, dy + 70, 80, 25).collidepoint(x, y):
-                        self.hemisphere = HEMISPHERE_NORTH if i == 0 else HEMISPHERE_SOUTH
-                        self._ace_changed = True
-                        return True
-                if pygame.Rect(dx + 370, dy + 100, 20, 20).collidepoint(x, y):
-                    self.disable_dpi_scaling = not self.disable_dpi_scaling
+            # Tab 栏点击（保留独立处理，需要 rebuild_fields）
+            dx, dy, dw, dh = self.bg_rect
+            tab_y = dy + 40
+            tab_w = (dw - 10) // len(SETTINGS_TAB_NAMES)
+            for i in range(len(SETTINGS_TAB_NAMES)):
+                tr = pygame.Rect(dx + 5 + i * tab_w, tab_y, tab_w - 2, 38)
+                if tr.collidepoint(x, y):
+                    self.tab_index = i
+                    self._tab_indicator_target = tr.x + 4
+                    self.rebuild_fields()
                     return True
-                if pygame.Rect(dx + 370, dy + 140, 20, 20).collidepoint(x, y):
-                    self.ac = not self.ac
+            # 统一派发其他点击目标
+            for rect, cb in self._targets:
+                if rect.collidepoint(x, y):
+                    cb()
                     return True
-                if pygame.Rect(dx + 370, dy + 170, 20, 20).collidepoint(x, y):
-                    self.show_info_box_normal = not self.show_info_box_normal
-                    return True
-                if pygame.Rect(dx + 370, dy + 200, 20, 20).collidepoint(x, y):
-                    self.show_info_box_season = not self.show_info_box_season
-                    return True
-                if pygame.Rect(dx + 370, dy + 230, 20, 20).collidepoint(x, y):
-                    self.fade_typhoon = not self.fade_typhoon
-                    return True
-                if pygame.Rect(dx + 370, dy + 260, 20, 20).collidepoint(x, y):
-                    self.fade_path = not self.fade_path
-                    return True
-                if pygame.Rect(dx + 370, dy + 290, 20, 20).collidepoint(x, y):
-                    self.smooth_path = not self.smooth_path
-                    return True
-                if pygame.Rect(dx + 370, dy + 320, 20, 20).collidepoint(x, y):
-                    self.ace_interpolated = not self.ace_interpolated
-                    return True
-                if pygame.Rect(dx + 370, dy + 350, 20, 20).collidepoint(x, y):
-                    self.show_fps = not self.show_fps
-                    return True
-                if pygame.Rect(dx + 150, dy + 385, 100, 25).collidepoint(x, y):
-                    self.ace_display_mode = "original"
-                    return True
-                if pygame.Rect(dx + 260, dy + 385, 100, 25).collidepoint(x, y):
-                    self.ace_display_mode = "progress_bar"
-                    return True
-                for i in range(3):
-                    if pygame.Rect(dx + 150 + i * 120, dy + 415, 100, 25).collidepoint(x, y):
-                        self.name_display_mode = i
-                        return True
-            elif self.current_page == 2:
-                modes = [ACE_LIMIT_NONE, ACE_LIMIT_LATLON, ACE_LIMIT_BASIN]
-                for i in range(3):
-                    if pygame.Rect(dx + 150 + i * 105, dy + 65, 95, 25).collidepoint(x, y):
-                        self.ace_limit_mode = modes[i]
-                        self._ace_changed = True
-                        self.rebuild_fields()
-                        return True
-                if self.ace_limit_mode == ACE_LIMIT_BASIN:
-                    basin_rect = self._get_basin_rect()
-                    if basin_rect.collidepoint(x, y):
-                        self._basin_dropdown_open = True
-                        self._basin_scroll_offset = 0
-                        return True
-                    # 洋区限制开关（复用ACE洋区）
-                    basin_filter_y = dy + 145
-                    if pygame.Rect(dx + 370, basin_filter_y, 20, 20).collidepoint(x, y):
-                        self.basin_filter_enabled = not self.basin_filter_enabled
-                        self._ace_changed = True
-                        return True
+        if self.handle_drag_event(e):
+            return True
         return False
 
     def _get_basin_rect(self):
@@ -1050,12 +1246,14 @@ class Settings(DraggableDialog):
         self.sim.hemisphere = self.hemisphere
         self.sim.point_size = self.point_size
         self.sim.icon_size = self.icon_size
+        self.sim.fix_icon_point_size = self.fix_icon_point_size
         self.sim.disable_dpi_scaling = self.disable_dpi_scaling
         self.sim.fade_typhoon = self.fade_typhoon
         self.sim.fade_path = self.fade_path
         self.sim.smooth_path = self.smooth_path
         self.sim.ace_interpolated = self.ace_interpolated
         self.sim.show_fps = self.show_fps
+        self.sim.icon_set = self.icon_set
         if old_smooth != self.smooth_path:
             self.sim.update_all_screen_points()
 

@@ -5,6 +5,8 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from typing import Dict, Optional, TYPE_CHECKING
 
+from .constants import SEASON_SPEED_DEFAULT
+
 if TYPE_CHECKING:
     from .typhoon import Typhoon
     from .data_repo import DataRepository
@@ -28,7 +30,7 @@ class SeasonController:
         self.edy: int = 2000
         self.csa: float = 0.0
         self.current_ace_year: int = 2000
-        self.ssf: float = 12 * 3600
+        self.ssf: float = SEASON_SPEED_DEFAULT
         self.yf: bool = False
         self._start_cache: Dict[Typhoon, datetime] = {}
         self._dialog_mgr: object = None

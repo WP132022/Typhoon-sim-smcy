@@ -1,10 +1,10 @@
 ﻿# py/landfall_effect.py
-"""登陆效果类。"""
+"""登陆效果类（简单图标 PNG + SMCY 视频）。"""
 from __future__ import annotations
 
 import math
 import pygame
-from typing import Callable, Optional
+from typing import Callable, List, Optional
 
 
 class LandfallEffect:
@@ -45,3 +45,32 @@ class LandfallEffect:
             rotated = pygame.transform.rotate(ring, angle)
             r = rotated.get_rect(center=(x, y))
             surface.blit(rotated, r)
+
+
+class LandfallEffectSMCY:
+    """SMCY 视频登陆特效：播放 60 帧 1 秒动画。"""
+
+    def __init__(self, strength: str, lon: float, lat: float,
+                 frames: List[pygame.Surface],
+                 start_time: float,
+                 latlon_to_screen_func: Callable[[float, float], tuple]) -> None:
+        self.strength = strength
+        self.lon = lon
+        self.lat = lat
+        self.frames = frames
+        self.start_time = start_time
+        self.latlon_to_screen = latlon_to_screen_func
+        self._frame_count = len(frames)
+
+    def update(self, current_time: float) -> bool:
+        elapsed = (current_time - self.start_time) / 1000.0
+        return elapsed < (self._frame_count / 60.0)
+
+    def draw(self, surface: pygame.Surface, current_time: float) -> None:
+        elapsed = (current_time - self.start_time) / 1000.0
+        idx = int(elapsed * 60)
+        if 0 <= idx < self._frame_count:
+            x, y = self.latlon_to_screen(self.lat, self.lon)
+            frame = self.frames[idx]
+            r = frame.get_rect(center=(x, y))
+            surface.blit(frame, r)

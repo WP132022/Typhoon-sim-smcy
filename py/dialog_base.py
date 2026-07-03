@@ -7,6 +7,10 @@ from typing import Optional, Tuple, TYPE_CHECKING
 
 from .constants import (
     LIST_BG, TXT, BUTTON_BORDER, BUTTON_BG, BUTTON_DISABLED, DIALOG_TITLE_BAR_HEIGHT,
+    SETTINGS_DARK_BG, SETTINGS_DARK_OVERLAY, SETTINGS_ACCENT,
+    SETTINGS_TEXT_LIGHT, SETTINGS_TEXT_DIM,
+    SETTINGS_INPUT_BG, SETTINGS_TOGGLE_ON, SETTINGS_TOGGLE_OFF,
+    DIALOG_CORNER_RADIUS,
     f_s, f_m
 )
 
@@ -41,6 +45,10 @@ class Dialog:
         self.active: bool = False
         self.current_field: int = 0
 
+    @property
+    def dark_mode(self) -> bool:
+        return getattr(self.sim, 'dark_mode', True)
+
     def activate(self, *args, **kwargs) -> None:
         self.active = True
         if hasattr(self.sim, '_dialog_stack') and self not in self.sim._dialog_stack:
@@ -60,6 +68,38 @@ class Dialog:
 
     def draw(self, surface: pygame.Surface) -> None:
         pass
+
+    def draw_dark_overlay(self, surface: pygame.Surface) -> None:
+        """全屏暗色半透明遮罩。"""
+        ov = pygame.Surface((self.sim.screen_width, self.sim.screen_height), pygame.SRCALPHA)
+        ov.fill(SETTINGS_DARK_OVERLAY)
+        surface.blit(ov, (0, 0))
+
+    def draw_dark_panel(self, surface: pygame.Surface, rect: pygame.Rect) -> None:
+        """暗色圆角面板背景。"""
+        panel = pygame.Surface(rect.size, pygame.SRCALPHA)
+        pygame.draw.rect(panel, SETTINGS_DARK_BG, (0, 0, rect.w, rect.h), border_radius=DIALOG_CORNER_RADIUS)
+        surface.blit(panel, rect)
+
+    def draw_dark_button(self, surface, rect, text, hover=False, accent=False):
+        """暗色主题按钮。"""
+        if accent:
+            bg = SETTINGS_ACCENT
+            tc = (20, 25, 35)
+        else:
+            bg = SETTINGS_TOGGLE_ON if hover else SETTINGS_TOGGLE_OFF
+            tc = SETTINGS_TEXT_LIGHT if hover else SETTINGS_TEXT_DIM
+        pygame.draw.rect(surface, bg, rect, border_radius=6)
+        if isinstance(text, str):
+            ts = CONTENT_FONT.render(text, True, tc)
+        else:
+            ts = text
+        surface.blit(ts, (rect.x + (rect.w - ts.get_width()) // 2, rect.y + (rect.h - ts.get_height()) // 2))
+
+    def draw_dark_title(self, surface, text: str, rect: pygame.Rect, y_offset: int = 12):
+        """暗色标题居中。"""
+        ts = TITLE_FONT.render(text, True, SETTINGS_TEXT_LIGHT)
+        surface.blit(ts, (rect.x + 20, rect.y + y_offset))
 
     def draw_background(self, surface: pygame.Surface, rect: pygame.Rect,
                         color: Tuple = DIALOG_BG,

@@ -466,40 +466,16 @@ class ScriptEngine:
         self.sim.sp = speed
 
     def _ensure_date(self, date: datetime):
-        """确保 sim 的 sy / st 与给定日期一致（不失一般性地修正跨年边界）。"""
+        """确保 sim 的 sy / st / ste 与给定日期一致。"""
         if self.sim.sy != date.year:
             self.sim.sy = date.year
+            self.sim.ste = 0.0
         self.sim.st = date.strftime("%m%d%H")
 
     def _do_time_jump(self, target_date: datetime):
-        """执行时间跳跃。"""
-        y, m, d, h = target_date.year, target_date.month, target_date.day, target_date.hour
-        ts = (target_date - datetime(y, 1, 1, 0)).total_seconds()
-        self.sim.ste = ts
-        self.sim.sy = y
-        self.sim.st = target_date.strftime("%m%d%H")
-        self.sim.current_ace_year = self.sim.get_ace_year(target_date)
-        self.sim.csa = self.sim.calc_accumulated_ace_up_to(y, m, d, h)
-
-        for ty in self.sim.tys:
-            ty.rst()
-            if not ty.pts:
-                continue
-            try:
-                st = datetime.strptime(ty.pts[0]['t'][:10], "%Y%m%d%H")
-                et = datetime.strptime(ty.pts[-1]['t'][:10], "%Y%m%d%H")
-            except Exception:
-                continue
-            if target_date < st:
-                ty.ss = ty.act = ty.sf = False
-            elif target_date > et:
-                ty.sf = True
-                ty.act = ty.ss = False
-            else:
-                ty.ss = ty.act = True
-                ty.sf = False
-                ty.set_current_time(target_date)
-                ty.last_ace_ci = ty.ci
+        """执行时间跳跃（委托给 season_ctrl，确保状态一致）。"""
+        self.sim.season_ctrl.jump_to(target_date)
+        self.sim._sync_season_state()
 
     def _update_sim_view(self):
         """将 sim 的 bounds 同步到视图。"""

@@ -12,7 +12,7 @@ if TYPE_CHECKING:
     from .ty_sim import TySim
 
 
-@dataclass
+@dataclass(slots=True)
 class TrackPoint:
     t: str = ""
     la: float = 0.0
@@ -57,6 +57,7 @@ _VIEW_FIELDS = frozenset({
     "_path_cache_key",
     "_path_cache_drag_surf", "_path_cache_drag_key", "_path_cache_drag_pos",
     "smooth_screen_points", "_smooth_arc_lengths",
+    "_smcy_frame", "_smcy_last_cat", "_smcy_last_ticks",
 })
 
 
@@ -87,6 +88,9 @@ class TyphoonView:
         self._path_cache_drag_pos: Tuple[int, int] = (0, 0)
         self.smooth_screen_points: List[Tuple[int, int]] = []
         self._smooth_arc_lengths: List[float] = []
+        self._smcy_frame: int = 0
+        self._smcy_last_cat: str = ""
+        self._smcy_last_ticks: int = 0
 
 
 class Typhoon:
@@ -234,6 +238,7 @@ class Typhoon:
             color=color, color_dim=color_dim,
             cat=cat,
         ))
+        self.points_time = []
         if hasattr(self, '_cached_max_wind_color'):
             delattr(self, '_cached_max_wind_color')
 

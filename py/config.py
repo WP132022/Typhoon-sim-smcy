@@ -8,7 +8,7 @@ import json
 import os
 import logging
 
-from .constants import HEMISPHERE_NORTH
+from .constants import HEMISPHERE_NORTH, ICON_SET_DEFAULT
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +54,7 @@ class AppConfig:
     hemisphere: str = HEMISPHERE_NORTH
     point_size: int = 100
     icon_size: int = 100
+    fix_icon_point_size: bool = False
     fade_typhoon: bool = True
     fade_path: bool = True
     smooth_path: bool = False
@@ -63,6 +64,8 @@ class AppConfig:
     monthly_summary: bool = True
 
     disable_dpi_scaling: bool = True
+
+    icon_set: str = ICON_SET_DEFAULT
 
     tn: Dict[str, str] = field(default_factory=dict)
 
@@ -77,12 +80,12 @@ class AppConfig:
         "land_min_lon", "land_max_lon", "land_min_lat", "land_max_lat",
         "main_rotation_speed", "level3_rotation_speed", "volume",
         "name_display_mode", "hemisphere",
-        "point_size", "icon_size",
+        "point_size", "icon_size", "fix_icon_point_size",
         "fade_typhoon", "fade_path",
         "smooth_path", "smooth_path_segments",
         "ace_interpolated", "show_fps",
         "monthly_summary",
-        "disable_dpi_scaling", "tn",
+        "disable_dpi_scaling", "icon_set", "tn",
     )
 
     @classmethod
