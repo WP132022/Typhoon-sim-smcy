@@ -34,6 +34,7 @@ _apply_dpi()
 from py.utils import load_window_size
 import py.constants as constants
 from py.ty_sim import TySim
+from py import perf
 
 
 def main():
@@ -53,6 +54,7 @@ def main():
     running = True
     while running:
         dt = clock.tick(0) / 1000.0
+        perf.reset_frame()
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 running = False
@@ -60,11 +62,15 @@ def main():
                 sim.handle_resize(event.w, event.h)
             else:
                 sim.handle_event(event)
+        perf.tick("event")
         sim.update(dt)
-        sim.draw(screen)
-        pygame.display.flip()
+        perf.tick("update")
+        if sim.draw(screen):
+            pygame.display.flip()
+        perf.tick("draw")
+        perf.end_frame()
 
-    sim.save_config()
+    sim.save_config(force=True)
     pygame.quit()
     sys.exit()
 

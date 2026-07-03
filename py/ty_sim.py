@@ -8,7 +8,7 @@ import logging
 from typing import List, Optional, Dict, Any, Tuple, TYPE_CHECKING
 from datetime import datetime
 
-from .constants import f_s, rt, TXT, CPH, CONFIG_FILE, SEASON_SPEED_DEFAULT, MAX_INFO_BOX_SLOTS
+from .constants import f_s, rt, TXT, CPH, CONFIG_FILE, USER_PREFS_FILE, SEASON_SPEED_DEFAULT, MAX_INFO_BOX_SLOTS
 from .config import AppConfig
 from .typhoon import Typhoon
 from .landfall_effect import LandfallEffect
@@ -67,6 +67,9 @@ class _ConfigProperty:
 
     def __set__(self, obj: TySim, value) -> None:
         setattr(obj.cfg, self._name, value)
+        obj._config_needs_save = True
+        if self._name == 'sp':
+            obj._save_user_prefs()
         if self._name == 'icon_set':
             obj.res_mgr.icon_set = value
 
@@ -165,6 +168,7 @@ class TySim(TySimUtilsMixin,
         self._install_descriptors()
 
         self.season_ctrl = SeasonController(self.cfg, self.repo, self.ace_engine)
+        self._load_user_prefs()
         self.playback_ctrl = PlaybackController(self.cfg, self.repo, self.view,
                                                  self.ace_engine, self.res_mgr, self.map_mgr)
         self._pre_render_texts()
@@ -182,6 +186,9 @@ class TySim(TySimUtilsMixin,
         self.renderer = Renderer(self)
         self.update_all_screen_points()
         self.map_mgr.update_land_mask()
+
+        from .particle_effect import preload_particles
+        preload_particles()
 
         if self.window_topmost:
             self.toggle_window_topmost()
@@ -250,6 +257,7 @@ class TySim(TySimUtilsMixin,
         self._drag_offset_x = 0
         self._drag_offset_y = 0
         self._view_dirty = False
+        self._frame_dirty = True
         self._game_ct: int = 0
 
         self._ace_timeline_cache: Dict[int, List[Tuple[datetime, float]]] = {}
@@ -299,6 +307,28 @@ class TySim(TySimUtilsMixin,
             return
         self.cfg.save(CONFIG_FILE)
         self._config_needs_save = False
+        self._save_user_prefs()
+
+    def _load_user_prefs(self) -> None:
+        """从独立缓存文件加载用户偏好（速度等）。"""
+        import json, os
+        if os.path.exists(USER_PREFS_FILE):
+            try:
+                with open(USER_PREFS_FILE, 'r', encoding='utf-8') as f:
+                    prefs = json.load(f)
+                if 'sp' in prefs:
+                    self.sp = float(prefs['sp'])
+            except Exception:
+                pass
+
+    def _save_user_prefs(self) -> None:
+        """保存用户偏好到独立缓存文件。"""
+        import json
+        try:
+            with open(USER_PREFS_FILE, 'w', encoding='utf-8') as f:
+                json.dump({'sp': self.sp}, f)
+        except Exception:
+            pass
 
     def _refresh_ace_data(self) -> None:
         self.ace_engine.refresh_all()
@@ -361,12 +391,14 @@ class TySim(TySimUtilsMixin,
         if self.map_mgr.land_img is not None:
             self.map_mgr.land_img = None
         self._view_dirty = True
+        self._frame_dirty = True
 
     def update_all_screen_points(self) -> None:
         self.view.update_screen_points(self.tys, self.edit_typhoon)
         self._invalidate_all_path_caches()
 
     def update(self, dt: float) -> None:
+        from . import perf
         ct = pygame.time.get_ticks()
         self.lst = ct
         self._fps = 1.0 / dt if dt > 0 else 60.0
@@ -380,12 +412,14 @@ class TySim(TySimUtilsMixin,
         if self.md == _MODE_SEASON:
             self.season_ctrl._pl = self.pl
             self.season_ctrl.update(dt)
+            perf.tick("  season_ctrl.update")
 
         self.script_engine.update(dt)
 
         dialog_open = self.dialog_mgr.any_active()
         self.playback_ctrl._pl = self.pl
         self.playback_ctrl.update_all(ct, dt, dialog_open, self.season_ctrl)
+        perf.tick("  playback_ctrl")
         self.effects = self.playback_ctrl.effects
         self.landfall_records = self.playback_ctrl.landfall_records
         if self.pl != self.playback_ctrl._pl:
@@ -395,6 +429,14 @@ class TySim(TySimUtilsMixin,
         if self.md == _MODE_SEASON and self.pl:
             self._check_monthly_summary()
         self._ms.update(dt)
+
+        self._frame_dirty |= (
+            self.pl or
+            self._view_dirty or
+            len(self.effects) > 0 or
+            self.dialog_mgr.any_active() or
+            bool(self.error_message and pygame.time.get_ticks() - self.error_time < 2000)
+        )
 
     def _sync_to_season_ctrl(self) -> None:
         sc = self.season_ctrl

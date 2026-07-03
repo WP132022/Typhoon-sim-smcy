@@ -14,6 +14,7 @@ class TySimEventMixin:
     """事件处理: 键盘、鼠标点击"""
 
     def handle_event(self, e: pygame.event.Event) -> bool:
+        self._frame_dirty = True
         # 对话框优先处理（栈顶优先）
         if self.dialog_mgr.any_active():
             stack = getattr(self, '_dialog_stack', [])

@@ -66,6 +66,7 @@ class AppConfig:
     disable_dpi_scaling: bool = True
 
     icon_set: str = ICON_SET_DEFAULT
+    basin_filter_enabled: bool = True
 
     tn: Dict[str, str] = field(default_factory=dict)
 
@@ -85,7 +86,7 @@ class AppConfig:
         "smooth_path", "smooth_path_segments",
         "ace_interpolated", "show_fps",
         "monthly_summary",
-        "disable_dpi_scaling", "icon_set", "tn",
+        "disable_dpi_scaling", "icon_set", "basin_filter_enabled", "tn",
     )
 
     @classmethod

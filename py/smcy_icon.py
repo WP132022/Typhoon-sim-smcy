@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import os
 import logging
+from collections import OrderedDict
 from typing import Dict, Optional, Tuple
 
 import cv2
@@ -37,41 +38,67 @@ _FRAME_INTERVAL_MS = int(500.0 / _FPS)
 _VIDEO_EXT = '.mp4'
 _CACHE_MAX = 120
 _SMCY_SPEED = 2.0
+_MAX_STREAMS = 8
+
+
+def _is_ex_category(cat: str) -> bool:
+    return cat == 'EX'
 
 
 def _frame_to_surface(frame_bgr: np.ndarray) -> pygame.Surface:
-    """BGR 帧转 BGRA Surface，alpha = max(R,G,B)。"""
-    b, g, r = cv2.split(frame_bgr)
-    alpha = cv2.max(cv2.max(r, g), b)
-    frame_bgra = cv2.merge([b, g, r, alpha])
+    """BGR 帧转 BGRA Surface，alpha = max(R,G,B)。numpy 加速版。"""
+    alpha = frame_bgr.max(axis=2).astype(np.uint8)
+    frame_bgra = np.dstack([frame_bgr, alpha])
     return pygame.image.frombuffer(frame_bgra.tobytes(), frame_bgra.shape[1::-1], 'BGRA')
 
 
 class _VideoStream:
-    """单个视频的流式读取 + 小窗口帧缓存。"""
+    """单个视频的流式读取 + OrderedDict 帧缓存（O(1) 驱逐）。"""
 
     def __init__(self, path: str) -> None:
         self._cap = cv2.VideoCapture(path)
-        self._cache: Dict[int, pygame.Surface] = {}
+        self._cache: OrderedDict[int, pygame.Surface] = OrderedDict()
+        self._orig_w: int = 0
+        self._orig_h: int = 0
+        self._scale_size: Optional[Tuple[int, int]] = None
+        if self._cap.isOpened():
+            self._orig_w = int(self._cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+            self._orig_h = int(self._cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
 
     @property
     def is_open(self) -> bool:
         return self._cap.isOpened()
 
+    @property
+    def orig_size(self) -> Tuple[int, int]:
+        return (self._orig_w, self._orig_h)
+
+    def set_scale_size(self, size: Tuple[int, int]) -> None:
+        if self._scale_size != size:
+            self._scale_size = size
+            self._cache.clear()
+
     def get_frame(self, idx: int) -> Optional[pygame.Surface]:
         idx = idx % _TOTAL_FRAMES
         if idx in self._cache:
+            self._cache.move_to_end(idx)
             return self._cache[idx]
         self._cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
         ret, frame_bgr = self._cap.read()
         if not ret:
             return None
+        if self._scale_size:
+            frame_bgr = cv2.resize(frame_bgr, self._scale_size, interpolation=cv2.INTER_LINEAR)
         surf = _frame_to_surface(frame_bgr)
         self._cache[idx] = surf
         if len(self._cache) > _CACHE_MAX:
-            oldest = min(self._cache.keys())
-            del self._cache[oldest]
+            self._cache.popitem(last=False)
         return surf
+
+    def preload_window(self, start_idx: int, count: int = 30) -> None:
+        """预加载 [start_idx, start_idx+count) 帧到缓存，避免后续 seek 卡顿。"""
+        for i in range(start_idx, min(start_idx + count, _TOTAL_FRAMES)):
+            self.get_frame(i)
 
     def release(self) -> None:
         self._cap.release()
@@ -85,6 +112,9 @@ class SMCYIconManager:
         self._base_dir = os.path.join(SUCAI_DIR, ICON_SET_SMCY, 'mainicon')
         self._streams: Dict[str, _VideoStream] = {}
         self._sizes: Dict[str, Tuple[int, int]] = {}
+        self._icon_size_cache: int = 0
+        self._ex_icon_size_cache: int = 0
+        self._access_order: list = []
 
     # ── 公开接口 ──
 
@@ -95,6 +125,7 @@ class SMCYIconManager:
             stream = self._open(category, hemisphere)
         if stream is None:
             return None
+        self._touch(key)
         return stream.get_frame(frame_idx)
 
     def get_size(self, category: str, hemisphere: str) -> Optional[Tuple[int, int]]:
@@ -108,12 +139,37 @@ class SMCYIconManager:
             return None
         return self._sizes.get(key)
 
+    def preload_frame_window(self, category: str, hemisphere: str,
+                              frame_idx: int, count: int = 30) -> None:
+        key = self._make_key(category, hemisphere)
+        stream = self._streams.get(key)
+        if stream is None:
+            stream = self._open(category, hemisphere)
+        if stream is not None:
+            self._touch(key)
+            stream.preload_window(frame_idx, count)
+
     def unload_unused(self, active_keys: set) -> None:
-        """释放不在 active_keys 中的视频流。"""
         for key in list(self._streams.keys()):
             if key not in active_keys:
                 self._streams[key].release()
                 del self._streams[key]
+                if key in self._access_order:
+                    self._access_order.remove(key)
+
+    def set_icon_size(self, size: int, ex_size: int = 0) -> None:
+        if self._icon_size_cache == size and self._ex_icon_size_cache == ex_size:
+            return
+        self._icon_size_cache = size
+        self._ex_icon_size_cache = ex_size
+        for key, stream in self._streams.items():
+            cat = key.split(':', 1)[1] if ':' in key else ''
+            if _is_ex_category(cat) and ex_size:
+                ow, oh = stream.orig_size
+                scale = min(ex_size / ow, ex_size / oh)
+                stream.set_scale_size((max(1, int(ow * scale)), max(1, int(oh * scale))))
+            else:
+                stream.set_scale_size((size, size))
 
     # ── 内部方法 ──
 
@@ -125,6 +181,19 @@ class SMCYIconManager:
     @staticmethod
     def _hemi_prefix(hemisphere: str) -> str:
         return 'N' if hemisphere == HEMISPHERE_NORTH else 'S'
+
+    def _touch(self, key: str) -> None:
+        if key in self._access_order:
+            self._access_order.remove(key)
+        self._access_order.append(key)
+
+    def _evict_lru(self) -> None:
+        while len(self._streams) > _MAX_STREAMS and self._access_order:
+            oldest = self._access_order.pop(0)
+            if oldest in self._streams:
+                self._streams[oldest].release()
+                del self._streams[oldest]
+                logger.debug(f"SMCY: LRU 回收 {oldest}")
 
     def _get_file_name(self, category: str) -> Optional[str]:
         if category in _TC_CATEGORIES:
@@ -158,15 +227,20 @@ class SMCYIconManager:
             logger.warning(f"SMCY: 无法打开视频 {video_path}")
             return None
 
+        if self._icon_size_cache > 0:
+            if _is_ex_category(category) and self._ex_icon_size_cache > 0:
+                ow, oh = stream.orig_size
+                scale = min(self._ex_icon_size_cache / ow, self._ex_icon_size_cache / oh)
+                stream.set_scale_size((max(1, int(ow * scale)), max(1, int(oh * scale))))
+            else:
+                stream.set_scale_size((self._icon_size_cache, self._icon_size_cache))
+
         key = self._make_key(category, hemisphere)
         self._streams[key] = stream
+        self._sizes[key] = stream.orig_size
+        self._evict_lru()
 
-        cap = stream._cap
-        w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-        h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        self._sizes[key] = (w, h)
-
-        logger.info(f"SMCY: 打开 {video_name} ({w}x{h})")
+        logger.info(f"SMCY: 打开 {video_name} ({stream.orig_size[0]}x{stream.orig_size[1]})")
         return stream
 
 
@@ -182,16 +256,17 @@ _LANDFALL_MAP = {
     'MD': '[Landing]MD',
 }
 
-_landfall_cache: Dict[str, list] = {}
+_landfall_cache: Dict[Tuple[str, int, int], list] = {}
 
 
-def get_landfall_frames(category: str) -> Optional[list]:
-    """获取登陆特效的全部帧（60帧，~60MB），缓存后复用。"""
+def get_landfall_frames(category: str, target_w: int = 0, target_h: int = 0) -> Optional[list]:
+    """获取登陆特效的全部帧，加载时预缩放到目标尺寸，按尺寸缓存。"""
     name = _LANDFALL_MAP.get(category)
     if name is None:
         return None
-    if name in _landfall_cache:
-        return _landfall_cache[name]
+    cache_key = (name, target_w, target_h)
+    if cache_key in _landfall_cache:
+        return _landfall_cache[cache_key]
     path = os.path.join(SUCAI_DIR, ICON_SET_SMCY, 'landfall', f'{name}.mp4')
     if not os.path.exists(path):
         return None
@@ -203,10 +278,12 @@ def get_landfall_frames(category: str) -> Optional[list]:
         ret, frame_bgr = cap.read()
         if not ret:
             break
+        if target_w > 0 and target_h > 0:
+            frame_bgr = cv2.resize(frame_bgr, (target_w, target_h), interpolation=cv2.INTER_LINEAR)
         frames.append(_frame_to_surface(frame_bgr))
     cap.release()
-    _landfall_cache[name] = frames
-    logger.info(f"SMCY 登陆特效: 加载 {name}.mp4 ({len(frames)} 帧)")
+    _landfall_cache[cache_key] = frames
+    logger.info(f"SMCY 登陆特效: 加载 {name}.mp4 ({len(frames)} 帧, {target_w}x{target_h})")
     return frames
 
 

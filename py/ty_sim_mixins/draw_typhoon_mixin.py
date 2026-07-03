@@ -13,6 +13,7 @@ from ..constants import (
     INFO_BOX_BG, INFO_BOX_BORDER,
     FUTURE_LINE_ALPHA, FADE_DURATION, ICON_SET_SMCY,
 )
+from ..smcy_icon import get_smcy_manager, _FRAME_INTERVAL_MS, _TOTAL_FRAMES
 
 
 class TySimDrawTyphoonMixin:
@@ -177,7 +178,8 @@ class TySimDrawTyphoonMixin:
                 return self._get_circle_marker(r, pc), r, r
 
     def _render_path_to_surface(self, ty, screen_points, highlight):
-        """增量渲染：cached_full（半透明全路径）+ cached_traversed（不透明已走段）。"""
+        """增量渲染：cached_full（半透明全路径）+ cached_traversed（不透明已走段）。
+        使用 bbox 尺寸 Surface，避免全屏分配。"""
         point_radius_factor = self.point_size / 100.0
         if self.fix_icon_point_size and self.map_mgr.map_view.min_scale > 0:
             point_radius_factor *= self.map_mgr.map_view.scale / (self.map_mgr.map_view.min_scale * 2.5)
@@ -190,20 +192,31 @@ class TySimDrawTyphoonMixin:
         ci = ty.ci
         key = self._make_path_cache_key(ty, screen_points, highlight)
 
+        # 计算 bbox（含点标记边距）
+        margin = r + 4
+        xs = [p[0] for p in screen_points]
+        ys = [p[1] for p in screen_points]
+        bbox_x = max(0, min(xs) - margin)
+        bbox_y = max(0, min(ys) - margin)
+        bbox_w = min(self.screen_width - bbox_x, max(xs) - bbox_x + margin * 2)
+        bbox_h = min(self.map_height - bbox_y, max(ys) - bbox_y + margin * 2)
+        if bbox_w <= 0 or bbox_h <= 0:
+            return pygame.Surface((1, 1), pygame.SRCALPHA), (0, 0)
+
         # ── 缓存失效：重建 full + traversed ──
         if ty._path_cache_key != key:
             # full: 完整路径（半透明）
-            ty._path_cache_full = pygame.Surface(
-                (self.screen_width, self.map_height), pygame.SRCALPHA)
+            ty._path_cache_full = pygame.Surface((bbox_w, bbox_h), pygame.SRCALPHA)
             full = ty._path_cache_full
 
             line_color = (*PATH, FUTURE_LINE_ALPHA)
             if highlight and self.md == self.MODE_EDIT:
                 line_color = (*PATH, 255)
-            smooth_pts = (getattr(ty.v, 'smooth_screen_points', None)
-                          if getattr(self, 'smooth_path', False) else None)
-            draw_pts = smooth_pts if smooth_pts else screen_points
-            self._draw_lines_safe(full, line_color, draw_pts, 2, max_seg)
+            smooth_pts = (ty.v.smooth_screen_points
+                          if self.smooth_path else None)
+            drw = smooth_pts if smooth_pts else screen_points
+            rel = [(px - bbox_x, py - bbox_y) for px, py in drw]
+            self._draw_lines_safe(full, line_color, rel, 2, max_seg)
 
             for i, (p, (x, y)) in enumerate(zip(ty.pts, screen_points)):
                 pc = p['color'] if highlight else p['color_dim']
@@ -211,23 +224,23 @@ class TySimDrawTyphoonMixin:
                 mk, ox, oy = self._make_point_marker(
                     pc, cat, p, r, point_radius_factor, 255,
                     highlight, is_future=True)
-                full.blit(mk, (x - ox, y - oy))
+                full.blit(mk, (x - bbox_x - ox, y - bbox_y - oy))
 
             # traversed: 从头构建已走段（不透明）
-            ty._path_cache_traversed = pygame.Surface(
-                (self.screen_width, self.map_height), pygame.SRCALPHA)
+            ty._path_cache_traversed = pygame.Surface((bbox_w, bbox_h), pygame.SRCALPHA)
             trav = ty._path_cache_traversed
 
-            smooth_sp = (getattr(ty.v, 'smooth_screen_points', None)
-                         if getattr(self, 'smooth_path', False) else None)
+            smooth_sp = (ty.v.smooth_screen_points
+                         if self.smooth_path else None)
             if ci > 0:
                 if smooth_sp:
-                    segs = max(1, getattr(self, 'smooth_path_segments', 10))
+                    segs = max(1, self.smooth_path_segments)
                     end_idx = min(ci * segs, len(smooth_sp) - 1)
                     passed_line = smooth_sp[:end_idx + 1]
                 else:
                     passed_line = screen_points[:ci + 1] if len(screen_points) > 1 else screen_points
-                self._draw_lines_safe(trav, PATH, passed_line, 2, max_seg)
+                rel_line = [(px - bbox_x, py - bbox_y) for px, py in passed_line]
+                self._draw_lines_safe(trav, PATH, rel_line, 2, max_seg)
 
             for i in range(ci):
                 p = ty.pts[i]
@@ -237,18 +250,19 @@ class TySimDrawTyphoonMixin:
                 mk, ox, oy = self._make_point_marker(
                     pc, cat, p, r, point_radius_factor, 255,
                     highlight, is_future=False)
-                trav.blit(mk, (x - ox, y - oy))
+                trav.blit(mk, (x - bbox_x - ox, y - bbox_y - oy))
 
             ty._last_rendered_ci = ci
             ty._path_cache_key = key
+            ty._path_cache_blit = (bbox_x, bbox_y)
 
 
         # ── 增量追加：ci 前进时在 traversed 上追加新线段 + 新点标记 ──
         elif ci > ty._last_rendered_ci:
             trav = ty._path_cache_traversed
-            smooth_sp = (getattr(ty.v, 'smooth_screen_points', None)
-                          if getattr(self, 'smooth_path', False) else None)
-            segs = max(1, getattr(self, 'smooth_path_segments', 10))
+            smooth_sp = (ty.v.smooth_screen_points
+                          if self.smooth_path else None)
+            segs = max(1, self.smooth_path_segments)
             if ty._last_rendered_ci >= 0:
                 if smooth_sp:
                     i0 = ty._last_rendered_ci * segs
@@ -256,16 +270,18 @@ class TySimDrawTyphoonMixin:
                     seg = smooth_sp[i0:i1 + 1]
                 else:
                     seg = screen_points[ty._last_rendered_ci:ci + 1]
-                if len(seg) > 1:
-                    self._draw_lines_safe(trav, PATH, seg, 2, max_seg)
+                rel_seg = [(px - bbox_x, py - bbox_y) for px, py in seg]
+                if len(rel_seg) > 1:
+                    self._draw_lines_safe(trav, PATH, rel_seg, 2, max_seg)
             elif ci > 0:
                 if smooth_sp:
                     i1 = min(ci * segs, len(smooth_sp) - 1)
                     passed = smooth_sp[:i1 + 1]
                 else:
                     passed = screen_points[:ci + 1]
-                if len(passed) > 1:
-                    self._draw_lines_safe(trav, PATH, passed, 2, max_seg)
+                rel_pass = [(px - bbox_x, py - bbox_y) for px, py in passed]
+                if len(rel_pass) > 1:
+                    self._draw_lines_safe(trav, PATH, rel_pass, 2, max_seg)
 
             for i in range(max(0, ty._last_rendered_ci), ci):
                 p = ty.pts[i]
@@ -275,7 +291,7 @@ class TySimDrawTyphoonMixin:
                 mk, ox, oy = self._make_point_marker(
                     pc, cat, p, r, point_radius_factor, 255,
                     highlight, is_future=False)
-                trav.blit(mk, (x - ox, y - oy))
+                trav.blit(mk, (x - bbox_x - ox, y - bbox_y - oy))
 
             ty._last_rendered_ci = ci
 
@@ -284,16 +300,17 @@ class TySimDrawTyphoonMixin:
         elif ci < ty._last_rendered_ci:
             trav = ty._path_cache_traversed
             trav.fill((0, 0, 0, 0))
-            smooth_sp = (getattr(ty.v, 'smooth_screen_points', None)
-                          if getattr(self, 'smooth_path', False) else None)
-            segs = max(1, getattr(self, 'smooth_path_segments', 10))
+            smooth_sp = (ty.v.smooth_screen_points
+                          if self.smooth_path else None)
+            segs = max(1, self.smooth_path_segments)
             if ci > 0:
                 if smooth_sp:
                     end_idx = min(ci * segs, len(smooth_sp) - 1)
                     passed = smooth_sp[:end_idx + 1]
                 else:
                     passed = screen_points[:ci + 1] if len(screen_points) > 1 else screen_points
-                self._draw_lines_safe(trav, PATH, passed, 2, max_seg)
+                rel_pass = [(px - bbox_x, py - bbox_y) for px, py in passed]
+                self._draw_lines_safe(trav, PATH, rel_pass, 2, max_seg)
             for i in range(ci):
                 p = ty.pts[i]
                 x, y = screen_points[i]
@@ -302,7 +319,7 @@ class TySimDrawTyphoonMixin:
                 mk, ox, oy = self._make_point_marker(
                     pc, cat, p, r, point_radius_factor, 255,
                     highlight, is_future=False)
-                trav.blit(mk, (x - ox, y - oy))
+                trav.blit(mk, (x - bbox_x - ox, y - bbox_y - oy))
             ty._last_rendered_ci = ci
 
 
@@ -365,7 +382,8 @@ class TySimDrawTyphoonMixin:
 
             return ty._path_cache_drag_surf, ty._path_cache_drag_pos
 
-        return ty._path_cache_full, ty._path_cache_traversed, (0, 0)
+        blit_pos = getattr(ty, '_path_cache_blit', (0, 0))
+        return ty._path_cache_full, ty._path_cache_traversed, blit_pos
 
     def _blit_highlight(self, surface, x, y, r, highlight_r, pc, off_x, off_y):
         outer = self._get_circle_marker(highlight_r, CUR_POS)
@@ -390,6 +408,7 @@ class TySimDrawTyphoonMixin:
             ty._path_cache_traversed = None
             ty._last_rendered_ci = -1
             ty._path_cache_key = ()
+            ty._path_cache_blit = (0, 0)
             ty._path_cache_drag_surf = None
             ty._path_cache_drag_key = ()
 
@@ -438,13 +457,15 @@ class TySimDrawTyphoonMixin:
             ty, screen_points, highlight)
         if isinstance(result, tuple) and len(result) == 3:
             full_surf, trav_surf, (blit_x, blit_y) = result
-            full_surf.set_alpha(path_alpha)
-            trav_surf.set_alpha(path_alpha)
+            if path_alpha != 255:
+                full_surf.set_alpha(path_alpha)
+                trav_surf.set_alpha(path_alpha)
             surface.blit(full_surf, (blit_x + self._drag_offset_x, blit_y + self._drag_offset_y))
             surface.blit(trav_surf, (blit_x + self._drag_offset_x, blit_y + self._drag_offset_y))
         else:
             path_surf, path_blit = result
-            path_surf.set_alpha(path_alpha)
+            if path_alpha != 255:
+                path_surf.set_alpha(path_alpha)
             surface.blit(path_surf, (path_blit[0] + self._drag_offset_x, path_blit[1] + self._drag_offset_y))
 
         # 当前位置高亮（直接绘制，不分配复合 Surface）
@@ -512,7 +533,11 @@ class TySimDrawTyphoonMixin:
             cat = cp.get('cat', self.get_strength_category(cp['w'], cp['st']))
             trans = self._get_transition(ty)
 
-            if getattr(self, 'icon_set', None) == ICON_SET_SMCY:
+            if self.cfg.icon_set == ICON_SET_SMCY:
+                base_size = max(20, int(70 * icon_factor * 1.5))
+                ex_size = max(20, int(70 * icon_factor * 2.0))
+                get_smcy_manager().set_icon_size(base_size, ex_size)
+
                 now = pygame.time.get_ticks()
                 self._advance_smcy_frame(ty, cat, now, self.sp)
 
@@ -683,7 +708,6 @@ class TySimDrawTyphoonMixin:
     @staticmethod
     def _advance_smcy_frame(ty, cat, now, speed_factor=1.0):
         """只推进 SMCY 帧索引，不绘制。"""
-        from ..smcy_icon import _FRAME_INTERVAL_MS, _TOTAL_FRAMES
         v = ty.v
         hemi = 'S' if v.mirror else 'N'
         cat_key = f"{hemi}:{cat}"
@@ -701,27 +725,17 @@ class TySimDrawTyphoonMixin:
                 v._smcy_last_ticks = now - (elapsed % interval)
 
     def _draw_smcy_frame(self, surface, ty, cat, frame_idx, x, y, icon_factor, icon_alpha):
-        """纯绘制指定帧，不修改 typhoon 的帧状态。"""
-        from ..smcy_icon import get_smcy_manager
+        """纯绘制指定帧（缓存已预缩放，直接 blit）。"""
         hemi = HEMISPHERE_SOUTH if ty.v.mirror else HEMISPHERE_NORTH
-        mgr = get_smcy_manager()
-        frame = mgr.get_frame(cat, hemi, frame_idx)
+        frame = get_smcy_manager().get_frame(cat, hemi, frame_idx)
         if frame is None:
             return
-        orig_w, orig_h = frame.get_size()
-        size_mult = 2.0 if cat == 'EX' else 1.5
-        target_size = max(20, int(70 * icon_factor * size_mult))
-        scale = min(target_size / orig_w, target_size / orig_h)
-        new_w = max(1, int(orig_w * scale))
-        new_h = max(1, int(orig_h * scale))
-        scaled = pygame.transform.smoothscale(frame, (new_w, new_h))
-        scaled.set_alpha(icon_alpha)
-        rect = scaled.get_rect(center=(x, y))
-        surface.blit(scaled, rect)
+        frame.set_alpha(icon_alpha)
+        rect = frame.get_rect(center=(x, y))
+        surface.blit(frame, rect)
 
     def _draw_smcy_icon(self, surface, ty, cat, x, y, icon_factor, icon_alpha, speed_factor=1.0):
         """推进帧 + 绘制 SMCY 图标。"""
-        from ..smcy_icon import get_smcy_manager
         now = pygame.time.get_ticks()
         self._advance_smcy_frame(ty, cat, now, speed_factor)
         frame = get_smcy_manager().get_frame(

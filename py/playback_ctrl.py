@@ -7,6 +7,7 @@ from typing import List, Optional, TYPE_CHECKING
 
 from .typhoon import Typhoon
 from .landfall_effect import LandfallEffect, LandfallEffectSMCY
+from .particle_effect import RIEffect, play_eri_sound
 from .constants import FADE_DURATION, ICON_SET_SMCY
 
 if TYPE_CHECKING:
@@ -42,7 +43,8 @@ class PlaybackController:
         return self.view.latlon_to_screen(la, lo)
 
     def update_all(self, ct: float, dt: float, dialog_open: bool,
-                   season_ctrl: Optional[SeasonController] = None) -> None:
+                    season_ctrl: Optional[SeasonController] = None) -> None:
+        from . import perf
         paused = not self._pl or dialog_open
         md = self.cfg.md
         current = self.repo.current_typhoon() if md == _MODE_NORMAL else None
@@ -66,6 +68,7 @@ class PlaybackController:
         self.effects = [e for e in self.effects if e.update(ct)]
         if md == _MODE_SEASON and not paused and season_ctrl and self.cfg.ace_interpolated:
             season_ctrl.csa = self._compute_interpolated_csa(season_ctrl)
+            perf.tick("    ace_interp")
 
     def _fade_one(self, ty: Typhoon, ct: float) -> None:
         if ty.finish_time <= 0:
@@ -92,9 +95,12 @@ class PlaybackController:
                     self.repo.cti = (self.repo.cti + 1) % len(self.repo.tys)
                     self.repo.current_typhoon().rst()
         else:
+            prev_ci = ty.ci
             if not ty.v.ipos and ty.ci < len(pts) - 1:
                 ty.sm(ct)
             ty.um(ct, self.cfg.sp, paused)
+            if ty.ci != prev_ci:
+                self._check_particle_effects(ty, prev_ci, ct)
         ty.cace = (ty.interpolated_cace() if self.cfg.ace_interpolated
                    else (pts[ty.ci]['ace'] if pts and ty.ci < len(pts) else 0.0))
 
@@ -111,9 +117,12 @@ class PlaybackController:
             ty._mark_finished(ct)
             ty.sf = True
         elif not ty.fin:
+            prev_ci = ty.ci
             if not ty.v.ipos and ty.ci < len(pts) - 1:
                 ty.sm(ct)
             ty.um(ct, self.cfg.sp, paused)
+            if ty.ci != prev_ci:
+                self._check_particle_effects(ty, prev_ci, ct)
             if not paused and season_ctrl and ty.ci > ty.last_ace_ci:
                 for i in range(ty.last_ace_ci + 1, ty.ci + 1):
                     pt = pts[i]
@@ -129,29 +138,28 @@ class PlaybackController:
                    else (pts[ty.ci]['ace'] if pts else 0.0))
 
     def _compute_interpolated_csa(self,
-                                   season_ctrl: SeasonController) -> float:
+                                    season_ctrl: SeasonController) -> float:
+        """基于增量 CSA 只对活跃台风的当前点做插值修正，不再扫描全部台风×全部点。"""
         cur_year = season_ctrl.current_ace_year
-        total = 0.0
+        total = season_ctrl.csa
         for ty in self.repo.tys:
-            if not ty.pts:
+            if not ty.act or not ty.ss or ty.sf or ty.fin:
                 continue
-            for i, pt in enumerate(ty.pts):
-                if pt.ace_year != cur_year:
-                    continue
-                if not self.ace_engine.point_in_limit(pt.la, pt.lo):
-                    continue
-                if i <= ty.ci:
-                    total += pt.pace
-                elif i == ty.ci + 1 and ty.act and ty.ss and not ty.sf and not ty.fin:
+            if ty.ci < 0 or ty.ci >= len(ty.pts) - 1:
+                continue
+            pts = ty.pts
+            pt_cur = pts[ty.ci]
+            if pt_cur.get('pace', 0) > 0 and pt_cur.get('ace_year', 0) == cur_year:
+                if self.ace_engine.point_in_limit(pt_cur['la'], pt_cur['lo']):
+                    total -= pt_cur['pace']
+            pt_next = pts[ty.ci + 1]
+            if pt_next.get('pace', 0) > 0 and pt_next.get('ace_year', 0) == cur_year:
+                if self.ace_engine.point_in_limit(pt_next['la'], pt_next['lo']):
                     pt0 = ty.points_time[ty.ci]
                     pt1 = ty.points_time[ty.ci + 1]
-                    if pt1 > pt0 and pt.pace > 0:
-                        t = (ty.at - pt0) / (pt1 - pt0)
-                        t = max(0.0, min(1.0, t))
-                        total += pt.pace * t
-                    break
-                else:
-                    break
+                    if pt1 > pt0:
+                        t = max(0.0, min(1.0, (ty.at - pt0) / (pt1 - pt0)))
+                        total += pt_next['pace'] * t
         return total
 
     def _update_edit(self, ty: Typhoon, ct: float, paused: bool) -> None:
@@ -223,7 +231,9 @@ class PlaybackController:
                 if ty.ci != 0:
                     if self.cfg.icon_set == ICON_SET_SMCY:
                         from .smcy_icon import get_landfall_frames
-                        frames = get_landfall_frames(strength)
+                        icon_factor = self.cfg.icon_size / 100.0
+                        lf_size = max(20, int(70 * icon_factor * 1.5))
+                        frames = get_landfall_frames(strength, lf_size, lf_size)
                         if frames:
                             self.effects.append(LandfallEffectSMCY(
                                 strength, pos['lo'], pos['la'], frames, ct,
@@ -239,3 +249,23 @@ class PlaybackController:
                         sound.set_volume(self.cfg.volume)
                         sound.play()
         v.last_on_land = is_land
+
+    def _check_particle_effects(self, ty: Typhoon, prev_ci: int, ct: float) -> None:
+        """检测 RI 事件（唯一标准：24h 增强 ≥60kt，24h 内最多触发一次）。"""
+        pts = ty.pts
+        new_ci = ty.ci
+        if new_ci == prev_ci or new_ci <= 0 or len(pts) < 2:
+            return
+        icon_factor = self.cfg.icon_size / 100.0
+        # RI 24h 冷却检查 (2.0 points_time = 24h)
+        if ty.at - ty.v._last_ri_at < 2.0:
+            return
+        # RI 唯一标准: 24h 增强 ≥60kt（4 个官方报间隔）
+        officials = [i for i, p in enumerate(pts) if p.get('official', False)]
+        for idx in range(len(officials) - 4):
+            b, b4 = officials[idx], officials[idx + 4]
+            if b4 == new_ci and pts[b4]['w'] - pts[b]['w'] >= 60:
+                self.effects.append(RIEffect(ty, ct, self.view.latlon_to_screen, icon_factor))
+                play_eri_sound(self.cfg.volume)
+                ty.v._last_ri_at = ty.at
+                return

@@ -34,9 +34,11 @@ class Renderer:
         self._draw_scene(surface)
 
     def _draw_scene(self, surface: pygame.Surface) -> None:
+        from . import perf
         sim = self.sim
         surface.fill(BG)
         sim._draw_map(surface)
+        perf.tick("    map")
 
         if sim.md == sim.MODE_SEASON:
             sim.draw_season_clock(surface)
@@ -46,10 +48,9 @@ class Renderer:
                 sim.draw_season_info_boxes(surface)
 
         sim._draw_typhoons(surface)
+        perf.tick("    paths")
 
         ct = pygame.time.get_ticks()
-        for eff in sim.effects:
-            eff.draw(surface, ct)
 
         dialog_open = sim.dialog_mgr.any_active()
         if sim.md == sim.MODE_NORMAL:
@@ -60,9 +61,11 @@ class Renderer:
             for ty in sim.tys:
                 if ty.act and ty.ss and not ty.sf:
                     sim.draw_typhoon_info(surface, ty)
-        elif sim.md == sim.MODE_EDIT and sim.edit_typhoon:
-            if not dialog_open:
-                sim.draw_typhoon_info(surface, sim.edit_typhoon)
+        perf.tick("    icons")
+
+        for eff in sim.effects:
+            eff.draw(surface, ct)
+        perf.tick("    effects")
 
     def _draw_error(self, surface: pygame.Surface) -> None:
         sim = self.sim

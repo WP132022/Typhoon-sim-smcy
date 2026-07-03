@@ -10,7 +10,7 @@ from .constants import (
     BUTTON_BORDER, BUTTON_BG, BUTTON_DISABLED,
     CONTROL_PANEL_BG, CONTROL_PANEL_LINE,
     SPEED_BAR_BG, SPEED_BAR_FILL,
-    SETTINGS_DARK_BG, SETTINGS_TAB_BG, SETTINGS_ACCENT,
+    SETTINGS_DARK_BG, SETTINGS_TAB_BG, SETTINGS_ACCENT, SETTINGS_ACCENT_DARK,
     SETTINGS_TEXT_LIGHT, SETTINGS_TEXT_DIM,
     SETTINGS_TOGGLE_ON, SETTINGS_TOGGLE_OFF,
 )
@@ -201,7 +201,7 @@ class ControlPanel:
         surface.blit(speed_text, (sbx, by - 3))
         speed_bar_rect = pygame.Rect(sbx, by + 15, self.SPEED_BAR_W, self.SPEED_BAR_H)
         sb_bg = SETTINGS_TOGGLE_OFF if dark else SPEED_BAR_BG
-        sb_fill = SETTINGS_ACCENT if dark else SPEED_BAR_FILL
+        sb_fill = SETTINGS_ACCENT_DARK if dark else SPEED_BAR_FILL
         pygame.draw.rect(surface, sb_bg, speed_bar_rect, 0, 6)
         sr = (self.sim.sp - self.sim.mis) / (self.sim.mas - self.sim.mis)
         fw = int(self.SPEED_BAR_W * sr)

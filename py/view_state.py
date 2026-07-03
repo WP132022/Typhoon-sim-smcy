@@ -2,6 +2,7 @@
 """地图视图状态：屏幕尺寸、坐标转换、台风屏幕点更新。"""
 from __future__ import annotations
 
+import pygame
 from typing import List, Tuple, Optional, TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -67,10 +68,12 @@ class ViewState:
         return lat, lon
 
     def update_screen_points(self, tys: List[Typhoon],
-                             edit_typhoon: Optional[Typhoon] = None) -> None:
+                              edit_typhoon: Optional[Typhoon] = None) -> None:
         f = self.latlon_to_screen
+        sw, sh = self.screen_width, self.map_height
+        view_rect = pygame.Rect(-50, -50, sw + 100, sh + 100)
         for ty in tys:
-            ty.update_screen_points(f)
+            ty.update_screen_points(f, view_rect)
             if hasattr(ty, '_cached_max_wind_color'):
                 delattr(ty, '_cached_max_wind_color')
         if edit_typhoon:

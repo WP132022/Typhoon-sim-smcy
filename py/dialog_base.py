@@ -7,7 +7,7 @@ from typing import Optional, Tuple, TYPE_CHECKING
 
 from .constants import (
     LIST_BG, TXT, BUTTON_BORDER, BUTTON_BG, BUTTON_DISABLED, DIALOG_TITLE_BAR_HEIGHT,
-    SETTINGS_DARK_BG, SETTINGS_DARK_OVERLAY, SETTINGS_ACCENT,
+    SETTINGS_DARK_BG, SETTINGS_DARK_OVERLAY, SETTINGS_ACCENT, SETTINGS_ACCENT_DARK,
     SETTINGS_TEXT_LIGHT, SETTINGS_TEXT_DIM,
     SETTINGS_INPUT_BG, SETTINGS_TOGGLE_ON, SETTINGS_TOGGLE_OFF,
     DIALOG_CORNER_RADIUS,
@@ -84,7 +84,7 @@ class Dialog:
     def draw_dark_button(self, surface, rect, text, hover=False, accent=False):
         """暗色主题按钮。"""
         if accent:
-            bg = SETTINGS_ACCENT
+            bg = SETTINGS_ACCENT_DARK
             tc = (20, 25, 35)
         else:
             bg = SETTINGS_TOGGLE_ON if hover else SETTINGS_TOGGLE_OFF

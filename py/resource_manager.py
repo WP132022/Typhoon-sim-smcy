@@ -13,7 +13,7 @@ from typing import Dict, Optional, Tuple, Any, List
 import pygame
 
 from .constants import (
-    SUCAI_DIR, f_s, f_m, f_l, f_name,
+    SUCAI_DIR, SOUND_DIR, f_s, f_m, f_l, f_name,
     MD_COLOR, STS, C5_L, C5_D, DB, EX, TD, TS, C1, C2, C3, C4, C2_MINUS, C3_MINUS, C4_ST, WV,
     DEFAULT_MAP, LAND_MASK, BUTTON_BORDER, AREA_OCEAN_FILE, OCEAN_AREA_LINE,
     ICON_SET_DEFAULT,
@@ -281,7 +281,7 @@ class ResourceManager:
 
         for strength, suffix in {'C1': 'C1', 'C2': 'C2', 'C3': 'C3', 'C4': 'C4', 'C5': 'C5',
                                   'TS': 'TS', 'STS': 'TS', 'SS': 'SS', 'TD': 'TD', 'EX': 'EX', 'MD': 'MD'}.items():
-            path = os.path.join(icon_dir, f"sound.landfall.{suffix}.ogg")
+            path = os.path.join(SOUND_DIR, f"sound.landfall.{suffix}.ogg")
             if not os.path.exists(path):
                 path = os.path.join(SUCAI_DIR, f"sound.landfall.{suffix}.ogg")
             if os.path.exists(path):

@@ -7,7 +7,7 @@ import pygame
 from .constants import (
     f_s, f_m, rt, TXT,
     HEMISPHERE_NORTH, HEMISPHERE_SOUTH, LIST_BG, LIST_HL,
-    SETTINGS_DARK_BG, SETTINGS_DARK_OVERLAY, SETTINGS_ACCENT,
+    SETTINGS_DARK_BG, SETTINGS_DARK_OVERLAY, SETTINGS_ACCENT, SETTINGS_ACCENT_DARK,
     SETTINGS_TEXT_LIGHT, SETTINGS_TEXT_DIM,
     SETTINGS_TAB_BG, SETTINGS_TAB_ACTIVE, SETTINGS_TAB_HOVER,
     SETTINGS_INPUT_BG, SETTINGS_INPUT_BORDER,
@@ -340,11 +340,13 @@ class Settings(DraggableDialog):
         elif self.tab_index == 4:  # ACE
             config = []
             if self.ace_limit_mode == ACE_LIMIT_LATLON:
+                yy = y0 + 31
+                y2_y = yy + 30; y3_y = y2_y + 30; y4_y = y3_y + 30
                 config = [
-                    ("ace_min_lon", lon_to_display(self.ace_min_lon), (COL_X, y0, FIELD_W, FIELD_H), lonlat_val),
-                    ("ace_max_lon", lon_to_display(self.ace_max_lon), (COL_X, y1, FIELD_W, FIELD_H), lonlat_val),
-                    ("ace_min_lat", lat_to_display(self.ace_min_lat), (COL_X, y2, FIELD_W, FIELD_H), lonlat_val),
-                    ("ace_max_lat", lat_to_display(self.ace_max_lat), (COL_X, y3, FIELD_W, FIELD_H), lonlat_val),
+                    ("ace_min_lon", lon_to_display(self.ace_min_lon), (COL_X, yy, FIELD_W, FIELD_H), lonlat_val),
+                    ("ace_max_lon", lon_to_display(self.ace_max_lon), (COL_X, y2_y, FIELD_W, FIELD_H), lonlat_val),
+                    ("ace_min_lat", lat_to_display(self.ace_min_lat), (COL_X, y3_y, FIELD_W, FIELD_H), lonlat_val),
+                    ("ace_max_lat", lat_to_display(self.ace_max_lat), (COL_X, y4_y, FIELD_W, FIELD_H), lonlat_val),
                 ]
             return config
         else:  # 数据
@@ -401,7 +403,7 @@ class Settings(DraggableDialog):
         self._add_target(sc_rect, lambda: setattr(self, 'show_shortcuts', not self.show_shortcuts))
         self._draw_modern_button(surface, sc_rect, "快捷键", hover=sc_rect.collidepoint(mx, my), accent=False, dark=self.dark_mode)
         rl_rect = pygame.Rect(dx + dw - 148, dy + 8, 70, 22)
-        self._add_target(rl_rect, lambda: (self.sim.reload_typhoons(), self.sim.save_config()))
+        self._add_target(rl_rect, lambda: (self._apply_filter_now(), self.sim.reload_typhoons(), self.sim.save_config()))
         self._draw_modern_button(surface, rl_rect, "重载数据", hover=rl_rect.collidepoint(mx, my), accent=False, dark=self.dark_mode)
         self._shortcuts_btn_rect = sc_rect
         self._reload_btn_rect = rl_rect
@@ -421,7 +423,7 @@ class Settings(DraggableDialog):
             tr = pygame.Rect(tx, tab_y + 1, tab_w - 2, tab_area_h - 2)
             tab_rects.append(tr)
             active = i == self.tab_index
-            color = SETTINGS_ACCENT if active else (SETTINGS_TEXT_DIM if self.dark_mode else (100, 110, 130))
+            color = (SETTINGS_ACCENT_DARK if self.dark_mode else SETTINGS_ACCENT) if active else (SETTINGS_TEXT_DIM if self.dark_mode else (100, 110, 130))
             if tr.collidepoint(mx, my) and not active:
                 color = text_color
             lb = rt(f_s, name, color)
@@ -432,7 +434,7 @@ class Settings(DraggableDialog):
             self._tab_indicator_x = target_x
         ind_w = tab_w - 10
         ind = pygame.Rect(int(self._tab_indicator_x), tab_y + tab_area_h - 3, ind_w, 3)
-        pygame.draw.rect(surface, SETTINGS_ACCENT, ind, border_radius=2)
+        pygame.draw.rect(surface, SETTINGS_ACCENT_DARK if self.dark_mode else SETTINGS_ACCENT, ind, border_radius=2)
 
         # 内容区域
         content_top = tab_y + tab_area_h + 8
@@ -463,7 +465,7 @@ class Settings(DraggableDialog):
 
     def _draw_modern_button(self, surface, rect, text, hover=False, accent=False, dark=True):
         if accent:
-            bg = SETTINGS_ACCENT
+            bg = SETTINGS_ACCENT_DARK if dark else SETTINGS_ACCENT
             tc = (20, 25, 35)
         elif dark:
             bg = SETTINGS_TOGGLE_ON if hover else SETTINGS_TOGGLE_OFF
@@ -481,6 +483,29 @@ class Settings(DraggableDialog):
     def _add_target(self, rect, cb):
         self._targets.append((rect, cb))
 
+    def _on_ok(self):
+        self.apply_settings()
+        self._needs_save = False
+        super().deactivate()
+        self.dragging = False
+        self._basin_dropdown_open = False
+
+    def _on_close(self):
+        self._needs_save = False
+        super().deactivate()
+        self.dragging = False
+        self._basin_dropdown_open = False
+
+    def _apply_filter_now(self):
+        """即时应用洋区过滤器。"""
+        self.sim.basin_filter_enabled = self.basin_filter_enabled
+        self.sim.ace_limit_mode = self.ace_limit_mode
+        self.sim.ace_limit_basin = self.ace_limit_basin
+        self.sim.ace_geo_limit_enabled = (self.ace_limit_mode != ACE_LIMIT_NONE)
+        self.sim._apply_basin_filter()
+        self.sim.update_all_screen_points()
+        self.sim.save_config(force=True)
+
     def _cb(self, surface, x, y, checked, attr):
         """绘制复选框并自动记录点击目标。"""
         self._add_target(pygame.Rect(x, y, 16, 16), lambda a=attr: setattr(self, a, not getattr(self, a)))
@@ -489,8 +514,18 @@ class Settings(DraggableDialog):
     def _tg(self, surface, rect, label, on, cb):
         """绘制切换按钮并自动记录点击目标。"""
         self._add_target(rect, cb)
-        bg = SETTINGS_ACCENT if on else SETTINGS_TOGGLE_OFF
-        tc = (20, 25, 35) if on else SETTINGS_TEXT_DIM
+        dark = self.dark_mode
+        mx, my = pygame.mouse.get_pos()
+        hover = rect.collidepoint(mx, my) and not on
+        if on:
+            bg = SETTINGS_ACCENT_DARK if self.dark_mode else SETTINGS_ACCENT
+            tc = (20, 25, 35)
+        elif dark:
+            bg = SETTINGS_TOGGLE_ON if hover else SETTINGS_TOGGLE_OFF
+            tc = SETTINGS_TEXT_LIGHT if hover else SETTINGS_TEXT_DIM
+        else:
+            bg = (160, 175, 200) if hover else (200, 205, 215)
+            tc = (255, 255, 255) if hover else (60, 70, 90)
         pygame.draw.rect(surface, bg, rect, border_radius=6)
         if isinstance(label, str):
             ts = rt(f_s, label, tc)
@@ -512,7 +547,7 @@ class Settings(DraggableDialog):
             rx = x + i * (btn_w + 4)
             b = pygame.Rect(rx, y, btn_w, 22)
             on = i == active_idx
-            bg = SETTINGS_ACCENT if on else SETTINGS_TOGGLE_OFF
+            bg = (SETTINGS_ACCENT_DARK if self.dark_mode else SETTINGS_ACCENT) if on else SETTINGS_TOGGLE_OFF
             tc = (20, 25, 35) if on else SETTINGS_TEXT_DIM
             pygame.draw.rect(surface, bg, b, border_radius=6)
             lb = rt(f_s, label, tc)
@@ -582,12 +617,61 @@ class Settings(DraggableDialog):
         texts = [self.ace_limit_none_text, self.ace_limit_latlon_text, self.ace_limit_basin_text]
         for i, (mode, txt) in enumerate(zip(modes, texts)):
             r = pygame.Rect(dx + 140 + i * 105, y - 4, 95, 22)
-            self._tg(surface, r, txt, mode == self.ace_limit_mode, lambda m=mode: (setattr(self, 'ace_limit_mode', m), setattr(self, '_ace_changed', True), self.rebuild_fields()))
-        surface.blit(self.ace_limit_note, (dx + 30, y + 30))
+            self._tg(surface, r, txt, mode == self.ace_limit_mode, lambda m=mode: (
+                setattr(self, 'ace_limit_mode', m),
+                setattr(self, '_ace_changed', True),
+                self._apply_filter_now(),
+                self.rebuild_fields()))
+        if self.ace_limit_mode == ACE_LIMIT_LATLON:
+            # 经纬度输入标签
+            for i, lbl in enumerate([self.mlo_label, self.Mlo_label, self.mla_label, self.Mla_label]):
+                surface.blit(lbl, (dx + 30, y + 35 + i * 30))
         if self.ace_limit_mode == ACE_LIMIT_BASIN:
-            surface.blit(self.basin_filter_text, (dx + 30, y + 60))
-            self._cb(surface, dx + self.bg_rect.width - 50, y + 60, self.basin_filter_enabled, 'basin_filter_enabled')
-            surface.blit(self.basin_filter_note, (dx + 30, y + 78))
+            surface.blit(self.basin_filter_text, (dx + 30, y + 30))
+            # 盆地过滤 checkbox：立即生效
+            cbx = dx + self.bg_rect.width - 50
+            self._add_target(pygame.Rect(cbx, y + 30, 16, 16), lambda: (
+                setattr(self, 'basin_filter_enabled', not self.basin_filter_enabled),
+                self._apply_filter_now()
+            ))
+            self._draw_cb(surface, cbx, y + 30, self.basin_filter_enabled)
+            surface.blit(self.basin_filter_note, (dx + 30, y + 50))
+            br = pygame.Rect(dx + 140, y + 75, 220, 24)
+            current_basin = self.ace_limit_basin
+            area = self.sim.res_mgr.ocean_areas.get_by_code(current_basin) if current_basin else None
+            display = area.name_cn if area else (current_basin or "选择洋区")
+            self._add_target(br, lambda: (setattr(self, '_basin_dropdown_open', True), setattr(self, '_basin_scroll_offset', 0)))
+            dark = self.dark_mode
+            bg = SETTINGS_TOGGLE_ON if dark else (200, 205, 215)
+            tc = SETTINGS_TEXT_LIGHT if dark else (60, 70, 90)
+            pygame.draw.rect(surface, bg, br, border_radius=6)
+            ts = rt(f_s, display, tc)
+            surface.blit(ts, (br.x + 5, br.y + (br.h - ts.get_height()) // 2))
+            # 下拉列表
+            if self._basin_dropdown_open:
+                ITEM_H = 24
+                max_vis = 8
+                list_h = min(len(self._basin_list), max_vis) * ITEM_H
+                lr = pygame.Rect(br.x, br.bottom, br.width, list_h)
+                bg_c = SETTINGS_TAB_ACTIVE if dark else (255, 255, 255)
+                pygame.draw.rect(surface, bg_c, lr, 0, 3)
+                pygame.draw.rect(surface, SETTINGS_ACCENT if dark else (70, 130, 180), lr, 1, 3)
+                total = len(self._basin_list)
+                vs = max(0, min(self._basin_scroll_offset, total - max_vis))
+                for i in range(vs, min(vs + max_vis, total)):
+                    code, name_cn = self._basin_list[i]
+                    iy = lr.y + (i - vs) * ITEM_H
+                    ir = pygame.Rect(lr.x, iy, lr.width, ITEM_H)
+                    if ir.collidepoint(mx, my):
+                        hover_c = SETTINGS_ACCENT if dark else (180, 220, 255)
+                        pygame.draw.rect(surface, hover_c, ir)
+                    self._add_target(ir, lambda cd=code: (
+                        setattr(self, 'ace_limit_basin', cd),
+                        setattr(self, '_ace_changed', True),
+                        setattr(self, '_basin_dropdown_open', False),
+                        self._apply_filter_now()))
+                    it = rt(f_s, f"{code} {name_cn}", SETTINGS_TEXT_LIGHT if dark else TXT)
+                    surface.blit(it, (ir.x + 5, ir.y + 3))
 
     def _draw_tab_data(self, surface, dx, dy, top_y, mx, my):
         y = top_y + 5
@@ -705,8 +789,12 @@ class Settings(DraggableDialog):
         texts = [self.ace_limit_none_text, self.ace_limit_latlon_text, self.ace_limit_basin_text]
         btn_x = dx + 150
         for i, (mode, txt) in enumerate(zip(modes, texts)):
-            rect = pygame.Rect(btn_x + i * 105, dy + 65, 95, 25)
-            self._draw_toggle_button(surface, rect, txt, self.ace_limit_mode == mode)
+            r = pygame.Rect(btn_x + i * 105, dy + 65, 95, 25)
+            self._tg(surface, r, txt, self.ace_limit_mode == mode, lambda m=mode: (
+                setattr(self, 'ace_limit_mode', m),
+                setattr(self, '_ace_changed', True),
+                self._apply_filter_now(),
+                self.rebuild_fields()))
 
         if self.ace_limit_mode == ACE_LIMIT_LATLON:
             surface.blit(rt(f_s, "最小经度:", TXT), (dx + 40, dy + 110))
@@ -719,7 +807,11 @@ class Settings(DraggableDialog):
             # 洋区限制开关（复用ACE洋区，放在洋区选择器下方）
             basin_y = dy + 145
             surface.blit(self.basin_filter_text, (dx + 40, basin_y))
-            self._draw_checkbox(surface, dx + 370, basin_y, self.basin_filter_enabled)
+            self._add_target(pygame.Rect(dx + 370, basin_y, 16, 16), lambda: (
+                setattr(self, 'basin_filter_enabled', not self.basin_filter_enabled),
+                self._apply_filter_now()
+            ))
+            self._draw_cb(surface, dx + 370, basin_y, self.basin_filter_enabled)
             surface.blit(self.basin_filter_note, (dx + 40, basin_y + 25))
             self._draw_basin_selector(surface, dx, dy)
 
@@ -1047,8 +1139,15 @@ class Settings(DraggableDialog):
         if not self.active:
             return False
 
+        # 洋区下拉框: ESC / 滚轮 单独处理
         if self._basin_dropdown_open:
-            return self._handle_basin_dropdown(e)
+            if e.type == pygame.KEYDOWN and e.key == pygame.K_ESCAPE:
+                self._basin_dropdown_open = False
+                return True
+            if e.type == pygame.MOUSEWHEEL:
+                self._basin_scroll_offset -= e.y
+                self._basin_scroll_offset = max(0, min(self._basin_scroll_offset, len(self._basin_list) - 8))
+                return True
 
         # ── 快捷键面板：拦截所有事件 ──
         if self.show_shortcuts:
@@ -1124,44 +1223,19 @@ class Settings(DraggableDialog):
                     self.rebuild_fields()
                     return True
             # 统一派发其他点击目标
+            hit = False
             for rect, cb in self._targets:
                 if rect.collidepoint(x, y):
                     cb()
+                    hit = True
                     return True
+            # 洋区下拉框打开时，点击空白处关闭
+            if self._basin_dropdown_open:
+                self._basin_dropdown_open = False
+                return True
         if self.handle_drag_event(e):
             return True
         return False
-
-    def _get_basin_rect(self):
-        dx, dy = self.bg_rect.x, self.bg_rect.y
-        return pygame.Rect(dx + 150, dy + 105, 220, 26)
-
-    def _handle_basin_dropdown(self, e) -> bool:
-        if e.type == pygame.KEYDOWN:
-            if e.key == pygame.K_ESCAPE:
-                self._basin_dropdown_open = False
-                return True
-            return True
-        if e.type == pygame.MOUSEWHEEL:
-            self._basin_scroll_offset -= e.y
-            self._basin_scroll_offset = max(0, min(self._basin_scroll_offset, len(self._basin_list) - 8))
-            return True
-        if e.type == pygame.MOUSEBUTTONDOWN and e.button == 1:
-            dx, dy = self.bg_rect.x, self.bg_rect.y
-            x, y = e.pos
-            rect = self._get_basin_rect()
-            list_h = min(len(self._basin_list), 8) * 24
-            list_rect = pygame.Rect(rect.x, rect.bottom, rect.width, list_h)
-            if list_rect.collidepoint(x, y):
-                idx = int((y - list_rect.y) // 24) + self._basin_scroll_offset
-                if 0 <= idx < len(self._basin_list):
-                    self.ace_limit_basin = self._basin_list[idx][0]
-                    self._ace_changed = True
-                    self._basin_dropdown_open = False
-                    return True
-            self._basin_dropdown_open = False
-            return True
-        return True
 
     def _sync_ace_settings_to_sim(self):
         self.sim.ace_limit_mode = self.ace_limit_mode
@@ -1209,13 +1283,6 @@ class Settings(DraggableDialog):
         self.mas = min(20.0, self.mas)
         self.volume = max(0.0, min(1.0, self.volume))
 
-        # 检测洋区过滤相关设置是否变化（需重载台风数据）
-        # 必须在 ace_limit_basin/ace_limit_mode 同步到 sim 之前获取旧值
-        old_filter = (getattr(self.sim, 'basin_filter_enabled', True),
-                      self.sim.ace_limit_basin,
-                      self.sim.ace_limit_mode)
-        new_filter = (self.basin_filter_enabled, self.ace_limit_basin, self.ace_limit_mode)
-
         # 同步到 sim（先记录视图相关旧值，仅变化时重建视图）
         old_view_bounds = (self.sim.mlo, self.sim.Mlo, self.sim.mla, self.sim.Mla,
                            self.sim.screen_width, self.sim.screen_height)
@@ -1258,6 +1325,7 @@ class Settings(DraggableDialog):
             self.sim.update_all_screen_points()
 
         self.sim.basin_filter_enabled = self.basin_filter_enabled
+        self.sim._apply_basin_filter()
 
         if self._ace_changed:
             self.sim.recalc_all_ace()
@@ -1267,9 +1335,6 @@ class Settings(DraggableDialog):
                            self.sim.screen_width, self.sim.screen_height)
         if old_view_bounds != new_view_bounds:
             self.sim.map_mgr.update_view()
-
-        if old_filter != new_filter:
-            self.sim._apply_basin_filter()
 
         self.sim.update_all_screen_points()
         self.sim._config_needs_save = True

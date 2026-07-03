@@ -17,7 +17,11 @@ class TySimDrawMixin(
 ):
 
     def draw(self, surface):
+        if not self._frame_dirty:
+            return False
         self.renderer.draw(surface)
+        self._frame_dirty = False
+        return True
 
     def _draw_map(self, surface):
         self.map_mgr.draw_map(surface)

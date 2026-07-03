@@ -104,7 +104,7 @@ class DataRepository:
                 if os.path.isfile(fp):
                     self.parse_typhoon_file(fp)
         self._all_tys_backup = list(self.tys)
-        if (getattr(self.cfg, 'basin_filter_enabled', True) and
+        if (getattr(self._sim, 'basin_filter_enabled', True) and
                 self.cfg.ace_limit_mode == "basin" and self.cfg.ace_limit_basin):
             area = self.res_mgr.ocean_areas.get_by_code(self.cfg.ace_limit_basin)
             if area is not None:
@@ -236,7 +236,7 @@ class DataRepository:
             self.load_typhoon_files()
             return
 
-        if (getattr(self.cfg, 'basin_filter_enabled', True) and
+        if (getattr(self._sim, 'basin_filter_enabled', True) and
                 self.cfg.ace_limit_mode == "basin" and self.cfg.ace_limit_basin):
             area = self.res_mgr.ocean_areas.get_by_code(self.cfg.ace_limit_basin)
             if area is not None:

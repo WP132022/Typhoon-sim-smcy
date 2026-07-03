@@ -54,10 +54,11 @@ _VIEW_FIELDS = frozenset({
     "screen_points", "bbox",
     "_img_cache",
     "_path_cache_full", "_path_cache_traversed", "_last_rendered_ci",
-    "_path_cache_key",
+    "_path_cache_key", "_path_cache_blit",
     "_path_cache_drag_surf", "_path_cache_drag_key", "_path_cache_drag_pos",
     "smooth_screen_points", "_smooth_arc_lengths",
     "_smcy_frame", "_smcy_last_cat", "_smcy_last_ticks",
+    "_last_ri_at",
 })
 
 
@@ -91,6 +92,7 @@ class TyphoonView:
         self._smcy_frame: int = 0
         self._smcy_last_cat: str = ""
         self._smcy_last_ticks: int = 0
+        self._last_ri_at: float = -999.0
 
 
 class Typhoon:
@@ -510,7 +512,7 @@ class Typhoon:
         self.fin = False
         self.cace = self.pts[self.ci]['ace']
 
-    def update_screen_points(self, latlon_to_screen_func: Callable[[float, float], Tuple[int, int]]) -> None:
+    def update_screen_points(self, latlon_to_screen_func, view_rect=None):
         v = self.v
         v.screen_points.clear()
         v.smooth_screen_points.clear()
@@ -525,6 +527,8 @@ class Typhoon:
             xs.append(x)
             ys.append(y)
         v.bbox = pygame.Rect(min(xs), min(ys), max(xs) - min(xs), max(ys) - min(ys))
+        if view_rect and not v.bbox.colliderect(view_rect):
+            return
         if self.sim and self.sim.cfg.smooth_path:
             from .spline import build_spline, compute_arc_lengths
             segs = self.sim.cfg.smooth_path_segments
