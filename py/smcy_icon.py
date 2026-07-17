@@ -33,11 +33,11 @@ _DB_CATEGORIES = {
 
 _FPS = 60.0
 _TOTAL_FRAMES = 1800
-_FRAME_INTERVAL_MS = int(500.0 / _FPS)
+_FRAME_INTERVAL_MS = int(1000.0 / _FPS)
 
 _VIDEO_EXT = '.mp4'
 _CACHE_MAX = 120
-_SMCY_SPEED = 2.0
+_SMCY_SPEED = 1.0
 _MAX_STREAMS = 8
 
 
@@ -60,10 +60,15 @@ class _VideoStream:
         self._cache: OrderedDict[int, pygame.Surface] = OrderedDict()
         self._orig_w: int = 0
         self._orig_h: int = 0
+        self._frame_count: int = _TOTAL_FRAMES
         self._scale_size: Optional[Tuple[int, int]] = None
+        self._last_pos: Optional[int] = None
         if self._cap.isOpened():
             self._orig_w = int(self._cap.get(cv2.CAP_PROP_FRAME_WIDTH))
             self._orig_h = int(self._cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+            fc = int(self._cap.get(cv2.CAP_PROP_FRAME_COUNT))
+            if fc > 0:
+                self._frame_count = fc
 
     @property
     def is_open(self) -> bool:
@@ -77,14 +82,29 @@ class _VideoStream:
         if self._scale_size != size:
             self._scale_size = size
             self._cache.clear()
+            self._last_pos = None
 
-    def get_frame(self, idx: int) -> Optional[pygame.Surface]:
-        idx = idx % _TOTAL_FRAMES
+    def get_frame(self, idx: int, target_size: Optional[Tuple[int, int]] = None) -> Optional[pygame.Surface]:
+        idx = idx % self._frame_count
+        if target_size and target_size != self._scale_size:
+            self._scale_size = target_size
+            self._cache.clear()
+            self._last_pos = None
         if idx in self._cache:
             self._cache.move_to_end(idx)
             return self._cache[idx]
-        self._cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
-        ret, frame_bgr = self._cap.read()
+
+        if self._last_pos is not None and self._last_pos < idx and idx - self._last_pos <= 30:
+            skip = idx - self._last_pos - 1
+            for _ in range(skip):
+                self._cap.grab()
+            ret, frame_bgr = self._cap.read()
+        else:
+            self._cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
+            ret, frame_bgr = self._cap.read()
+
+        self._last_pos = idx
+
         if not ret:
             return None
         if self._scale_size:
@@ -97,12 +117,13 @@ class _VideoStream:
 
     def preload_window(self, start_idx: int, count: int = 30) -> None:
         """预加载 [start_idx, start_idx+count) 帧到缓存，避免后续 seek 卡顿。"""
-        for i in range(start_idx, min(start_idx + count, _TOTAL_FRAMES)):
+        for i in range(start_idx, min(start_idx + count, self._frame_count)):
             self.get_frame(i)
 
     def release(self) -> None:
         self._cap.release()
         self._cache.clear()
+        self._last_pos = None
 
 
 class SMCYIconManager:
@@ -118,7 +139,8 @@ class SMCYIconManager:
 
     # ── 公开接口 ──
 
-    def get_frame(self, category: str, hemisphere: str, frame_idx: int) -> Optional[pygame.Surface]:
+    def get_frame(self, category: str, hemisphere: str, frame_idx: int,
+                  target_size: Optional[Tuple[int, int]] = None) -> Optional[pygame.Surface]:
         key = self._make_key(category, hemisphere)
         stream = self._streams.get(key)
         if stream is None:
@@ -126,7 +148,7 @@ class SMCYIconManager:
         if stream is None:
             return None
         self._touch(key)
-        return stream.get_frame(frame_idx)
+        return stream.get_frame(frame_idx, target_size)
 
     def get_size(self, category: str, hemisphere: str) -> Optional[Tuple[int, int]]:
         key = self._make_key(category, hemisphere)
@@ -166,6 +188,9 @@ class SMCYIconManager:
             cat = key.split(':', 1)[1] if ':' in key else ''
             if _is_ex_category(cat) and ex_size:
                 ow, oh = stream.orig_size
+                if ow <= 0 or oh <= 0:
+                    stream.set_scale_size((size, size))
+                    continue
                 scale = min(ex_size / ow, ex_size / oh)
                 stream.set_scale_size((max(1, int(ow * scale)), max(1, int(oh * scale))))
             else:
@@ -177,10 +202,6 @@ class SMCYIconManager:
     def _make_key(category: str, hemisphere: str) -> str:
         hemi = 'N' if hemisphere == HEMISPHERE_NORTH else 'S'
         return f"{hemi}:{category}"
-
-    @staticmethod
-    def _hemi_prefix(hemisphere: str) -> str:
-        return 'N' if hemisphere == HEMISPHERE_NORTH else 'S'
 
     def _touch(self, key: str) -> None:
         if key in self._access_order:
@@ -210,7 +231,7 @@ class SMCYIconManager:
             logger.warning(f"SMCY: 未找到类别映射 {category}")
             return None
 
-        hemi_prefix = self._hemi_prefix(hemisphere)
+        hemi_prefix = 'N' if hemisphere == HEMISPHERE_NORTH else 'S'
         parts = file_name.split('/')
         if len(parts) != 2:
             return None
@@ -230,8 +251,11 @@ class SMCYIconManager:
         if self._icon_size_cache > 0:
             if _is_ex_category(category) and self._ex_icon_size_cache > 0:
                 ow, oh = stream.orig_size
-                scale = min(self._ex_icon_size_cache / ow, self._ex_icon_size_cache / oh)
-                stream.set_scale_size((max(1, int(ow * scale)), max(1, int(oh * scale))))
+                if ow <= 0 or oh <= 0:
+                    stream.set_scale_size((self._icon_size_cache, self._icon_size_cache))
+                else:
+                    scale = min(self._ex_icon_size_cache / ow, self._ex_icon_size_cache / oh)
+                    stream.set_scale_size((max(1, int(ow * scale)), max(1, int(oh * scale))))
             else:
                 stream.set_scale_size((self._icon_size_cache, self._icon_size_cache))
 
@@ -285,6 +309,71 @@ def get_landfall_frames(category: str, target_w: int = 0, target_h: int = 0) -> 
     _landfall_cache[cache_key] = frames
     logger.info(f"SMCY 登陆特效: 加载 {name}.mp4 ({len(frames)} 帧, {target_w}x{target_h})")
     return frames
+
+
+# ── 摘要视频 ──
+
+_SUMMARY_DIR = os.path.join(SUCAI_DIR, ICON_SET_SMCY, 'summary')
+
+_SUMMARY_CATS = {
+    'TD': 'TD', 'TS': 'TS', 'STS': 'TS+', 'C1': 'C1', 'C2': 'C2',
+    'C2-': 'C2-', 'C3': 'C3', 'C3-': 'C3-', 'C4': 'C4', 'C4-ST': 'C4+',
+    'C5': 'C5', 'SS': 'SS',
+}
+
+_summary_streams: Dict[str, _VideoStream] = {}
+_summary_access: list = []
+_MAX_SUMMARY_STREAMS = 10
+
+
+def _summary_video_path(cat: str, hemi: str) -> Optional[str]:
+    name = _SUMMARY_CATS.get(cat)
+    if name is None:
+        return None
+    path = os.path.join(_SUMMARY_DIR, f"Summary-{hemi}-TC-{name}.mp4")
+    if os.path.exists(path):
+        return path
+    if cat == 'SS':
+        path = os.path.join(_SUMMARY_DIR, f"Summary-{hemi}-EX-{name}.mp4")
+        if os.path.exists(path):
+            return path
+    return None
+
+
+def has_summary_video(cat: str, hemi: str) -> bool:
+    """该等级/半球是否存在对应的摘要视频。"""
+    return _summary_video_path(cat, hemi) is not None
+
+
+def get_summary_frame(cat: str, hemi: str, idx: int,
+                      target_size: Optional[Tuple[int, int]] = None) -> Optional[pygame.Surface]:
+    """获取摘要视频的指定帧（流式读取 + 缓存，按宽高比缩放）。"""
+    global _summary_streams, _summary_access
+    path = _summary_video_path(cat, hemi)
+    if path is None:
+        return None
+    key = f"{hemi}:{cat}"
+    if key not in _summary_streams:
+        stream = _VideoStream(path)
+        if not stream.is_open:
+            return None
+        _summary_streams[key] = stream
+        while len(_summary_streams) > _MAX_SUMMARY_STREAMS and _summary_access:
+            oldest = _summary_access.pop(0)
+            if oldest in _summary_streams:
+                _summary_streams[oldest].release()
+                del _summary_streams[oldest]
+    if key in _summary_access:
+        _summary_access.remove(key)
+    _summary_access.append(key)
+    return _summary_streams[key].get_frame(idx, target_size)
+
+
+def set_summary_scale(w: int, h: int) -> None:
+    """设置摘要视频的预缩放尺寸（2/5 原大小）。"""
+    size = (w, h)
+    for stream in _summary_streams.values():
+        stream.set_scale_size(size)
 
 
 _smcy_manager: Optional[SMCYIconManager] = None

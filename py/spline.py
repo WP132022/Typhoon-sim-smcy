@@ -1,4 +1,4 @@
-﻿# py/spline.py
+# py/spline.py
 """Catmull-Rom 样条曲线 + 弧长参数化。"""
 from __future__ import annotations
 
@@ -56,6 +56,8 @@ def position_at_arc(pts: List[Tuple[float, float]],
                     arcs: List[float],
                     target: float) -> Tuple[float, float]:
     """给定弧长距离，求曲线上对应位置（线性插值于弧长段之间）。"""
+    if not pts:
+        return (0.0, 0.0)
     if target <= arcs[0]:
         return pts[0]
     if target >= arcs[-1]:

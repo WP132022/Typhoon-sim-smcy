@@ -46,8 +46,9 @@ def draw_typhoon_ace_chart(
 
     key = (id(typhoon_ace_list), bar_page, rect.width, rect.height)
 
-    if key not in _typhoon_ace_cache:
-        cached = {}
+    cached = _typhoon_ace_cache.get(key)
+    if cached is None or cached.get('src') is not typhoon_ace_list:
+        cached = {'src': typhoon_ace_list}
         w, h = rect.width, rect.height
         n = len(page_data)
         max_ace = max(ace for _, ace in typhoon_ace_list) if typhoon_ace_list else 1.0
@@ -91,7 +92,7 @@ def draw_typhoon_ace_chart(
             pygame.draw.rect(chart_surf, TXT, br, 1)
 
             # 数值标签
-            vs = rt(f_s, f"{ace:.2f}", TXT)
+            vs = rt(f_s, f"{ace:.4f}", TXT)
             vy = br.y - 18 if br.y - 18 > 0 else br.y + 12
             chart_surf.blit(vs, (br.centerx - vs.get_width() // 2, vy))
 
@@ -109,8 +110,6 @@ def draw_typhoon_ace_chart(
         if len(_typhoon_ace_cache) >= _MAX_CACHE:
             _typhoon_ace_cache.pop(next(iter(_typhoon_ace_cache)))
         _typhoon_ace_cache[key] = cached
-    else:
-        cached = _typhoon_ace_cache[key]
 
     # ── 绘制 ──
     surface.blit(cached['chart_surf'], rect.topleft)

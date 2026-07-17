@@ -2,13 +2,12 @@
 """台风路径模拟系统主控制类。"""
 from __future__ import annotations
 
-import math
 import pygame
 import logging
-from typing import List, Optional, Dict, Any, Tuple, TYPE_CHECKING
+from typing import List, Optional, Dict, Tuple, TYPE_CHECKING
 from datetime import datetime
 
-from .constants import f_s, rt, TXT, CPH, CONFIG_FILE, USER_PREFS_FILE, SEASON_SPEED_DEFAULT, MAX_INFO_BOX_SLOTS
+from .constants import f_s, rt, TXT, CPH, CONFIG_FILE, USER_PREFS_FILE, SEASON_SPEED_DEFAULT, MAX_INFO_BOX_SLOTS, HEMISPHERE_SOUTH, MODE_NORMAL, MODE_SEASON, MODE_EDIT
 from .config import AppConfig
 from .typhoon import Typhoon
 from .landfall_effect import LandfallEffect
@@ -20,19 +19,6 @@ from .playback_ctrl import PlaybackController
 from .season_ctrl import SeasonController
 from .input_ctrl import InputController
 from .renderer import Renderer
-from .ty_list import TyList
-from .time_jump import TimeJump
-from .settings import Settings
-from .new_typhoon_dialog import NewTyphoonDialog
-from .point_edit_dialog import PointEditDialog
-from .point_list import PointList
-from .statistics.dialog_chart import ACEChartDialog
-from .statistics.intensity_chart import IntensityChartDialog
-from .statistics.path_comparison import PathComparisonDialog
-from .statistics.heatmap import PathHeatmapDialog
-from .statistics.path_length_viewer import PathLengthViewer
-from .statistics.season_stats_dialog import SeasonStatsDialog
-from .statistics.intensity_comparison import IntensityComparisonDialog
 from .monthly_summary import MonthlySummary
 
 from .ty_sim_mixins import (
@@ -42,15 +28,18 @@ from .ty_sim_mixins import (
 from .ty_sim_mixins.keyboard_mixin import TySimKeyboardMixin
 from .script_engine import ScriptEngine
 from .script_dialog import ScriptDialog
+from .particle_effect import preload_particles
+import json
+import os
+from .input_handler import InputHandler
+from .dialog_manager import DialogManager
 
 if TYPE_CHECKING:
     from .resource_manager import MapView
 
 logger = logging.getLogger(__name__)
 
-_MODE_NORMAL = "normal"
-_MODE_SEASON = "season"
-_MODE_EDIT = "edit"
+
 
 
 class _ConfigProperty:
@@ -93,9 +82,9 @@ class _RepoProperty:
 class TySim(TySimUtilsMixin,
             TySimDrawMixin, TySimEventMixin, TySimKeyboardMixin):
 
-    MODE_NORMAL = _MODE_NORMAL
-    MODE_SEASON = _MODE_SEASON
-    MODE_EDIT = _MODE_EDIT
+    MODE_NORMAL = MODE_NORMAL
+    MODE_SEASON = MODE_SEASON
+    MODE_EDIT = MODE_EDIT
 
     _REPO_FIELDS = frozenset({'tys', 'cti', 'edit_typhoon', '_all_tys_backup'})
 
@@ -187,15 +176,17 @@ class TySim(TySimUtilsMixin,
         self.update_all_screen_points()
         self.map_mgr.update_land_mask()
 
-        from .particle_effect import preload_particles
         preload_particles()
 
         if self.window_topmost:
             self.toggle_window_topmost()
 
-        if self.md == _MODE_SEASON:
+        if self.md == MODE_SEASON:
             self._init_season_ace()
             self._sync_to_season_ctrl()
+            if self.hemisphere == HEMISPHERE_SOUTH:
+                self.season_ctrl.jump_to(datetime(self.sty, 7, 1, 0))
+                self._sync_season_state()
 
         self._dialog_stack: list = []
         self.landfall_records: list = []
@@ -205,7 +196,7 @@ class TySim(TySimUtilsMixin,
         if getattr(cls, '_descriptors_installed', False):
             return
         cls._descriptors_installed = True
-        for name in AppConfig._FIELDS:
+        for name in AppConfig._serialize_fields():
             if not hasattr(cls, name) or isinstance(getattr(cls, name, None), _ConfigProperty):
                 setattr(cls, name, _ConfigProperty(name))
         for name in cls._REPO_FIELDS:
@@ -257,7 +248,6 @@ class TySim(TySimUtilsMixin,
         self._drag_offset_x = 0
         self._drag_offset_y = 0
         self._view_dirty = False
-        self._frame_dirty = True
         self._game_ct: int = 0
 
         self._ace_timeline_cache: Dict[int, List[Tuple[datetime, float]]] = {}
@@ -311,7 +301,6 @@ class TySim(TySimUtilsMixin,
 
     def _load_user_prefs(self) -> None:
         """从独立缓存文件加载用户偏好（速度等）。"""
-        import json, os
         if os.path.exists(USER_PREFS_FILE):
             try:
                 with open(USER_PREFS_FILE, 'r', encoding='utf-8') as f:
@@ -323,7 +312,6 @@ class TySim(TySimUtilsMixin,
 
     def _save_user_prefs(self) -> None:
         """保存用户偏好到独立缓存文件。"""
-        import json
         try:
             with open(USER_PREFS_FILE, 'w', encoding='utf-8') as f:
                 json.dump({'sp': self.sp}, f)
@@ -391,14 +379,12 @@ class TySim(TySimUtilsMixin,
         if self.map_mgr.land_img is not None:
             self.map_mgr.land_img = None
         self._view_dirty = True
-        self._frame_dirty = True
 
     def update_all_screen_points(self) -> None:
         self.view.update_screen_points(self.tys, self.edit_typhoon)
         self._invalidate_all_path_caches()
 
     def update(self, dt: float) -> None:
-        from . import perf
         ct = pygame.time.get_ticks()
         self.lst = ct
         self._fps = 1.0 / dt if dt > 0 else 60.0
@@ -407,36 +393,27 @@ class TySim(TySimUtilsMixin,
         if self._view_dirty:
             self._view_dirty = False
             self.map_mgr.update_land_mask()
-            self._sync_land_state()
+            if not self.right_button_dragging:
+                self._sync_land_state()
 
-        if self.md == _MODE_SEASON:
+        if self.md == MODE_SEASON:
             self.season_ctrl._pl = self.pl
             self.season_ctrl.update(dt)
-            perf.tick("  season_ctrl.update")
 
         self.script_engine.update(dt)
 
         dialog_open = self.dialog_mgr.any_active()
         self.playback_ctrl._pl = self.pl
         self.playback_ctrl.update_all(ct, dt, dialog_open, self.season_ctrl)
-        perf.tick("  playback_ctrl")
         self.effects = self.playback_ctrl.effects
         self.landfall_records = self.playback_ctrl.landfall_records
         if self.pl != self.playback_ctrl._pl:
             self.pl = self.playback_ctrl._pl
             self.season_ctrl._pl = self.pl
         self._sync_season_state()
-        if self.md == _MODE_SEASON and self.pl:
+        if self.md == MODE_SEASON and self.pl:
             self._check_monthly_summary()
         self._ms.update(dt)
-
-        self._frame_dirty |= (
-            self.pl or
-            self._view_dirty or
-            len(self.effects) > 0 or
-            self.dialog_mgr.any_active() or
-            bool(self.error_message and pygame.time.get_ticks() - self.error_time < 2000)
-        )
 
     def _sync_to_season_ctrl(self) -> None:
         sc = self.season_ctrl
@@ -446,6 +423,7 @@ class TySim(TySimUtilsMixin,
         sc.st = self.st
         sc.ste = self.ste
         sc.csa = self.csa
+        sc.set_csa_base(self.csa)
         sc.current_ace_year = self.current_ace_year
 
     def _sync_season_state(self) -> None:
@@ -479,74 +457,5 @@ class TySim(TySimUtilsMixin,
     def _sync_land_state(self) -> None:
         self.view.sync_land_state(self.tys)
 
-    def _mark_view_dirty(self) -> None:
-        self._view_dirty = True
 
 
-class InputHandler:
-    def __init__(self, sim: TySim) -> None:
-        self.sim = sim
-        self._down = False
-        self._down_time = 0
-        self._down_pos = (0, 0)
-        self._triggered = False
-
-    def handle_event(self, e: pygame.event.Event) -> None:
-        if e.type == pygame.MOUSEBUTTONDOWN and e.button == 1:
-            self._down = True
-            self._down_time = pygame.time.get_ticks()
-            self._down_pos = e.pos
-            self._triggered = False
-        elif e.type == pygame.MOUSEBUTTONUP and e.button == 1:
-            self._down = False
-
-    def update(self, ct: int) -> None:
-        if self.sim.dialog_mgr.any_active():
-            return
-        if self._down and not self._triggered and ct - self._down_time >= 200:
-            mx, my = pygame.mouse.get_pos()
-            if math.hypot(mx - self._down_pos[0], my - self._down_pos[1]) < 10:
-                self.sim.on_long_press(mx, my)
-            self._triggered = True
-
-
-class DialogManager:
-    def __init__(self, sim: TySim) -> None:
-        self.sim = sim
-        self.tl = TyList(sim)
-        self.sd = Settings(sim)
-        self.tj = TimeJump(sim)
-        self.new_typhoon_dialog = NewTyphoonDialog(sim)
-        self.point_edit_dialog = PointEditDialog(sim)
-        self.point_list = PointList(sim)
-        self.ace_chart = ACEChartDialog(sim)
-        self.intensity_chart = IntensityChartDialog(sim)
-        self.path_comparison = PathComparisonDialog(sim)
-        self.heatmap = PathHeatmapDialog(sim)
-        self.path_length_viewer = PathLengthViewer(sim)
-        self.season_stats = SeasonStatsDialog(sim)
-        self.intensity_comparison = IntensityComparisonDialog(sim)
-
-    def handle_event(self, e: pygame.event.Event) -> bool:
-        return any(d.handle_event(e) for d in self._all() if d.active)
-
-    def draw(self, surface: pygame.Surface) -> None:
-        stack: list = getattr(self.sim, '_dialog_stack', [])
-        drawn = set()
-        for d in stack:
-            if d.active:
-                d.draw(surface)
-                drawn.add(id(d))
-        for d in self._all():
-            if d.active and id(d) not in drawn:
-                d.draw(surface)
-
-    def any_active(self) -> bool:
-        return any(d.active for d in self._all())
-
-    def _all(self) -> tuple:
-        return (self.tj, self.sd, self.tl, self.new_typhoon_dialog,
-                self.point_edit_dialog, self.point_list, self.ace_chart,
-                self.intensity_chart, self.path_comparison, self.heatmap,
-                self.path_length_viewer, self.season_stats, self.intensity_comparison,
-                self.sim.script_dialog)

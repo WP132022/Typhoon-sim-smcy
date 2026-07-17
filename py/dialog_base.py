@@ -7,9 +7,9 @@ from typing import Optional, Tuple, TYPE_CHECKING
 
 from .constants import (
     LIST_BG, TXT, BUTTON_BORDER, BUTTON_BG, BUTTON_DISABLED, DIALOG_TITLE_BAR_HEIGHT,
-    SETTINGS_DARK_BG, SETTINGS_DARK_OVERLAY, SETTINGS_ACCENT, SETTINGS_ACCENT_DARK,
+    SETTINGS_DARK_BG, SETTINGS_DARK_OVERLAY, settings_accent,
     SETTINGS_TEXT_LIGHT, SETTINGS_TEXT_DIM,
-    SETTINGS_INPUT_BG, SETTINGS_TOGGLE_ON, SETTINGS_TOGGLE_OFF,
+    SETTINGS_TOGGLE_ON, SETTINGS_TOGGLE_OFF,
     DIALOG_CORNER_RADIUS,
     f_s, f_m
 )
@@ -27,11 +27,9 @@ BTN_RADIUS = 5
 
 BTN_PRIMARY_NORMAL = BUTTON_BORDER
 BTN_PRIMARY_HOVER = (90, 150, 210)
-BTN_PRIMARY_PRESSED = (60, 120, 180)
 BTN_DISABLED = BUTTON_DISABLED
 BTN_LIGHT_NORMAL = BUTTON_BG
 BTN_LIGHT_HOVER = (130, 170, 220)
-BTN_LIGHT_PRESSED = (90, 130, 190)
 
 DIALOG_BG = LIST_BG
 DIALOG_BORDER = BUTTON_BORDER
@@ -40,6 +38,9 @@ DIALOG_RADIUS = 10
 
 
 class Dialog:
+    _overlay_cache: dict = {}
+    _panel_cache: dict = {}
+
     def __init__(self, sim: TySim) -> None:
         self.sim = sim
         self.active: bool = False
@@ -71,20 +72,32 @@ class Dialog:
 
     def draw_dark_overlay(self, surface: pygame.Surface) -> None:
         """全屏暗色半透明遮罩。"""
-        ov = pygame.Surface((self.sim.screen_width, self.sim.screen_height), pygame.SRCALPHA)
-        ov.fill(SETTINGS_DARK_OVERLAY)
+        key = (self.sim.screen_width, self.sim.screen_height, SETTINGS_DARK_OVERLAY)
+        ov = self._overlay_cache.get(key)
+        if ov is None:
+            ov = pygame.Surface((self.sim.screen_width, self.sim.screen_height), pygame.SRCALPHA)
+            ov.fill(SETTINGS_DARK_OVERLAY)
+            self._overlay_cache[key] = ov
+            if len(self._overlay_cache) > 4:
+                self._overlay_cache.pop(next(iter(self._overlay_cache)))
         surface.blit(ov, (0, 0))
 
     def draw_dark_panel(self, surface: pygame.Surface, rect: pygame.Rect) -> None:
         """暗色圆角面板背景。"""
-        panel = pygame.Surface(rect.size, pygame.SRCALPHA)
-        pygame.draw.rect(panel, SETTINGS_DARK_BG, (0, 0, rect.w, rect.h), border_radius=DIALOG_CORNER_RADIUS)
+        key = (rect.w, rect.h, DIALOG_CORNER_RADIUS)
+        panel = self._panel_cache.get(key)
+        if panel is None:
+            panel = pygame.Surface(rect.size, pygame.SRCALPHA)
+            pygame.draw.rect(panel, SETTINGS_DARK_BG, (0, 0, rect.w, rect.h), border_radius=DIALOG_CORNER_RADIUS)
+            self._panel_cache[key] = panel
+            if len(self._panel_cache) > 16:
+                self._panel_cache.pop(next(iter(self._panel_cache)))
         surface.blit(panel, rect)
 
     def draw_dark_button(self, surface, rect, text, hover=False, accent=False):
         """暗色主题按钮。"""
         if accent:
-            bg = SETTINGS_ACCENT_DARK
+            bg = settings_accent(True, self.sim.color_scheme)
             tc = (20, 25, 35)
         else:
             bg = SETTINGS_TOGGLE_ON if hover else SETTINGS_TOGGLE_OFF
@@ -101,20 +114,24 @@ class Dialog:
         ts = TITLE_FONT.render(text, True, SETTINGS_TEXT_LIGHT)
         surface.blit(ts, (rect.x + 20, rect.y + y_offset))
 
+    _bg_cache: dict = {}
+
     def draw_background(self, surface: pygame.Surface, rect: pygame.Rect,
                         color: Tuple = DIALOG_BG,
                         border_color: Tuple = DIALOG_BORDER,
                         alpha: bool = True,
                         radius: int = DIALOG_RADIUS) -> None:
-        if alpha:
+        key = (rect.width, rect.height, color, border_color, radius)
+        bg = self._bg_cache.get(key)
+        if bg is None:
             bg = pygame.Surface(rect.size, pygame.SRCALPHA)
             pygame.draw.rect(bg, color, (0, 0, rect.width, rect.height), 0, radius)
             pygame.draw.rect(bg, border_color, (0, 0, rect.width, rect.height),
                              DIALOG_BORDER_WIDTH, radius)
-            surface.blit(bg, rect)
-        else:
-            pygame.draw.rect(surface, color, rect, 0, radius)
-            pygame.draw.rect(surface, border_color, rect, DIALOG_BORDER_WIDTH, radius)
+            self._bg_cache[key] = bg
+            if len(self._bg_cache) > 32:
+                self._bg_cache.pop(next(iter(self._bg_cache)))
+        surface.blit(bg, rect)
 
     def draw_title(self, surface: pygame.Surface, title: pygame.Surface,
                    rect: pygame.Rect, y_offset: int = 15) -> None:
@@ -123,12 +140,15 @@ class Dialog:
         surface.blit(title, (x, y))
 
     def draw_button(self, surface: pygame.Surface, rect, text_surf: pygame.Surface,
-                    style: str = 'primary', enabled: bool = True,
+                    style='primary', enabled: bool = True,
                     hover: bool = False) -> None:
+        """style 可为 'primary'/'light' 风格名，或直接传入颜色元组。"""
         if not isinstance(rect, pygame.Rect):
             rect = pygame.Rect(rect)
         if not enabled:
             color = BTN_DISABLED
+        elif isinstance(style, tuple):
+            color = style
         elif style == 'primary':
             color = BTN_PRIMARY_HOVER if hover else BTN_PRIMARY_NORMAL
         else:
@@ -138,12 +158,7 @@ class Dialog:
             rect.centerx - text_surf.get_width() // 2,
             rect.centery - text_surf.get_height() // 2))
 
-    def draw_text_button(self, surface: pygame.Surface, rect,
-                         font, text: str, text_color: Tuple,
-                         style: str = 'primary',
-                         enabled: bool = True, hover: bool = False) -> None:
-        txt = font.render(text, True, text_color)
-        self.draw_button(surface, rect, txt, style, enabled, hover)
+    _title_bar_cache: dict = {}
 
     def draw_title_bar(self, surface: pygame.Surface, rect: pygame.Rect,
                        title_text: str, title_color: Tuple = TXT,
@@ -151,12 +166,18 @@ class Dialog:
         if not isinstance(rect, pygame.Rect):
             rect = pygame.Rect(rect)
         bar_rect = pygame.Rect(rect.x, rect.y, rect.width, DIALOG_TITLE_BAR_HEIGHT)
-        bar_surf = pygame.Surface((bar_rect.width, bar_rect.height), pygame.SRCALPHA)
-        bar_surf.fill((0, 0, 0, 30))
-        title = title_font.render(title_text, True, title_color)
-        bar_surf.blit(title, (
-            bar_surf.get_width() // 2 - title.get_width() // 2,
-            bar_surf.get_height() // 2 - title.get_height() // 2))
+        key = (rect.width, title_text, title_color, id(title_font))
+        bar_surf = self._title_bar_cache.get(key)
+        if bar_surf is None:
+            bar_surf = pygame.Surface((bar_rect.width, bar_rect.height), pygame.SRCALPHA)
+            bar_surf.fill((0, 0, 0, 30))
+            title = title_font.render(title_text, True, title_color)
+            bar_surf.blit(title, (
+                bar_surf.get_width() // 2 - title.get_width() // 2,
+                bar_surf.get_height() // 2 - title.get_height() // 2))
+            self._title_bar_cache[key] = bar_surf
+            if len(self._title_bar_cache) > 32:
+                self._title_bar_cache.pop(next(iter(self._title_bar_cache)))
         surface.blit(bar_surf, (bar_rect.x, bar_rect.y))
         return bar_rect
 

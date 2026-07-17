@@ -1,4 +1,3 @@
-# main.py
 import ctypes
 import os
 import pygame
@@ -34,7 +33,6 @@ _apply_dpi()
 from py.utils import load_window_size
 import py.constants as constants
 from py.ty_sim import TySim
-from py import perf
 
 
 def main():
@@ -42,7 +40,7 @@ def main():
     constants.SW, constants.SH = sw, sh
     constants.MH = sh - constants.CPH
 
-    screen = pygame.display.set_mode((sw, sh), pygame.RESIZABLE)
+    screen = pygame.display.set_mode((sw, sh), pygame.RESIZABLE, vsync=0)
     pygame.display.set_caption("台风路径模拟系统")
 
     sim = TySim(screen)
@@ -54,7 +52,6 @@ def main():
     running = True
     while running:
         dt = clock.tick(0) / 1000.0
-        perf.reset_frame()
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 running = False
@@ -62,13 +59,9 @@ def main():
                 sim.handle_resize(event.w, event.h)
             else:
                 sim.handle_event(event)
-        perf.tick("event")
         sim.update(dt)
-        perf.tick("update")
-        if sim.draw(screen):
-            pygame.display.flip()
-        perf.tick("draw")
-        perf.end_frame()
+        sim.draw(screen)
+        pygame.display.flip()
 
     sim.save_config(force=True)
     pygame.quit()

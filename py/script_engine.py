@@ -19,10 +19,9 @@
 
 from __future__ import annotations
 import os
-import re
 import logging
-from datetime import datetime, timedelta
-from typing import List, Optional, Tuple, Any
+from datetime import datetime
+from typing import List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -65,12 +64,6 @@ def _parse_date_required(s: str) -> datetime:
     """解析日期，失败或为空返回默认值 2000-01-01."""
     d = _parse_date(s)
     return d if d is not None else datetime(2000, 1, 1, 0)
-
-def _parse_seconds(s: str) -> float:
-    s = s.strip()
-    if not s:
-        return 0.0
-    return float(s)
 
 def _parse_speed(s: str) -> float:
     s = s.strip()
@@ -247,7 +240,7 @@ class Script:
                     target.move_to_date = script.start_jump_date or datetime(2000, 1, 1, 0)
                 else:
                     prev = script.targets[i - 1]
-                    target.move_to_date = prev.move_from_date or prev.move_to_date
+                    target.move_to_date = prev.move_from_date or prev.move_to_date or script.start_jump_date or datetime(2000, 1, 1, 0)
             if target.move_from_date is None:
                 if i + 1 < len(script.targets):
                     target.move_from_date = target.move_to_date
@@ -457,10 +450,6 @@ class ScriptEngine:
         ste_in_year = (date - datetime(date.year, 1, 1, 0)).total_seconds()
         return ste_in_year + date.year * self._SECONDS_PER_YEAR
 
-    def _date_to_ste(self, date: datetime) -> float:
-        """将 datetime 转换为年内秒数。"""
-        return (date - datetime(date.year, 1, 1, 0)).total_seconds()
-
     def _set_speed(self, speed: float):
         """设置模拟速度。"""
         self.sim.sp = speed
@@ -483,7 +472,7 @@ class ScriptEngine:
             self.sim.map_mgr.map_view.set_view_region(
                 self.sim.mlo, self.sim.Mlo, self.sim.mla, self.sim.Mla)
         self.sim.map_mgr.update_land_mask()
-        self.sim.update_all_screen_points()
+        self.sim._invalidate_all_path_caches()
         self.sim._view_dirty = True
 
     @staticmethod

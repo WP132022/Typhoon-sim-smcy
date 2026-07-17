@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import os
 import json
+import logging
 from typing import Tuple, Optional
 
+logger = logging.getLogger(__name__)
 _DEFAULT_W, _DEFAULT_H = 1360, 885
 
 
@@ -16,7 +18,8 @@ def load_window_size() -> Tuple[int, int]:
         w = max(800, min(cfg.get("screen_width", _DEFAULT_W), 3840))
         h = max(600, min(cfg.get("screen_height", _DEFAULT_H), 2160))
         return int(w), int(h)
-    except Exception:
+    except Exception as e:
+        logger.warning(f"无法加载窗口尺寸配置，使用默认值 {_DEFAULT_W}x{_DEFAULT_H}: {e}")
         return _DEFAULT_W, _DEFAULT_H
 
 
@@ -36,6 +39,36 @@ def find_insensitive_path(base_path: str) -> Optional[str]:
 
 fip = find_insensitive_path
 
+_NON_TROPICAL_TYPES = frozenset({'MD', 'SS', 'SD', 'EX', 'LO'})
+_EXCLUDED_TYPES = frozenset({'MD', 'SS', 'SD', 'EX', 'LO', 'DB'})
+
+# Saffir-Simpson 风力等级阈值 (kt)
+_WIND_TD_MAX = 28
+_WIND_TS_MIN = 34
+_WIND_STS_MIN = 49
+_WIND_C1_MIN = 64
+_WIND_C2_MINUS_MIN = 83
+_WIND_C2_MIN = 86
+_WIND_C3_MINUS_MIN = 96
+_WIND_C3_MIN = 105
+_WIND_C4_MIN = 113
+_WIND_C4_ST_MIN = 130
+_WIND_C5_MIN = 137
+
+
+def get_valid_winds(pts, exclude_extra: bool = False) -> list:
+    excluded = _EXCLUDED_TYPES if exclude_extra else _NON_TROPICAL_TYPES
+    return [p['w'] for p in pts if p['st'].upper() not in excluded]
+
+
+def get_tropical_points(pts) -> list:
+    return [p for p in pts if p['st'].upper() not in _NON_TROPICAL_TYPES]
+
+
+def max_wind_from_points(pts, exclude_extra: bool = False) -> int:
+    winds = get_valid_winds(pts, exclude_extra)
+    return max(winds) if winds else 0
+
 
 def infer_strength_category(wind: int, stype: str) -> str:
     st = stype.upper()
@@ -43,27 +76,27 @@ def infer_strength_category(wind: int, stype: str) -> str:
         return st
     if st == 'EX':
         return "EX"
-    if wind <= 28:
+    if wind <= _WIND_TD_MAX:
         return "DB"
-    if wind < 34:
+    if wind < _WIND_TS_MIN:
         return "TD"
-    if wind < 49:
+    if wind < _WIND_STS_MIN:
         return "TS"
-    if wind < 64:
+    if wind < _WIND_C1_MIN:
         return "STS"
-    if wind < 83:
+    if wind < _WIND_C2_MINUS_MIN:
         return "C1"
-    if wind < 86:
+    if wind < _WIND_C2_MIN:
         return "C2-"
-    if wind < 96:
+    if wind < _WIND_C3_MINUS_MIN:
         return "C2"
-    if wind < 105:
+    if wind < _WIND_C3_MIN:
         return "C3-"
-    if wind < 113:
+    if wind < _WIND_C4_MIN:
         return "C3"
-    if wind < 130:
+    if wind < _WIND_C4_ST_MIN:
         return "C4"
-    if wind < 137:
+    if wind < _WIND_C5_MIN:
         return "C4-ST"
     return "C5"
 

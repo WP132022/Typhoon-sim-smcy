@@ -7,7 +7,7 @@ import logging
 import pygame
 from datetime import datetime
 
-from ..constants import f_s, rt
+from ..constants import f_s, rt, HEMISPHERE_SOUTH
 
 logger = logging.getLogger(__name__)
 
@@ -42,8 +42,11 @@ class TySimKeyboardMixin:
         self.mlo, self.Mlo = saved_mlo, saved_Mlo
         self.mla, self.Mla = saved_mla, saved_Mla
 
-    def _undo_edit(self):
-        if self.edit_typhoon and self.edit_typhoon.undo():
+    def _apply_history(self, action: str) -> None:
+        if not self.edit_typhoon:
+            return
+        fn = getattr(self.edit_typhoon, action, None)
+        if fn and fn():
             self.edit_typhoon.update_screen_points(self.latlon_to_screen)
             self._refresh_ace_data()
             self._season_info_box_cache.pop(self.edit_typhoon, None)
@@ -54,17 +57,11 @@ class TySimKeyboardMixin:
             else:
                 self.dialog_mgr.point_list.save_typhoon_to_file(self.edit_typhoon)
 
+    def _undo_edit(self):
+        self._apply_history('undo')
+
     def _redo_edit(self):
-        if self.edit_typhoon and self.edit_typhoon.redo():
-            self.edit_typhoon.update_screen_points(self.latlon_to_screen)
-            self._refresh_ace_data()
-            self._season_info_box_cache.pop(self.edit_typhoon, None)
-            self._season_info_box_last_data.pop(self.edit_typhoon, None)
-            if self.dialog_mgr.point_list.active:
-                self.dialog_mgr.point_list._clear_row_cache()
-                self.dialog_mgr.point_list._needs_save = True
-            else:
-                self.dialog_mgr.point_list.save_typhoon_to_file(self.edit_typhoon)
+        self._apply_history('redo')
 
     def _key_h(self) -> bool:
         self.switch_mode()
@@ -286,11 +283,14 @@ class TySimKeyboardMixin:
                 self.csa = self._cached_season_csa
                 self.current_ace_year = self.get_ace_year(self._season_dt())
             else:
-                self.st = "010100"
+                if self.hemisphere == HEMISPHERE_SOUTH:
+                    self.st = "070100"
+                else:
+                    self.st = "010100"
                 self.ste = 0
                 self.csa = 0.0
                 self.sy = self.sty
-                current_dt = datetime(self.sy, 1, 1, 0)
+                current_dt = datetime(self.sy, int(self.st[0:2]), int(self.st[2:4]), int(self.st[4:6]))
                 self.current_ace_year = self.get_ace_year(current_dt)
                 self.csa = self.calc_accumulated_ace_up_to(
                     self.sy, int(self.st[0:2]), int(self.st[2:4]), int(self.st[4:6]))

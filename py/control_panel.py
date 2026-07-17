@@ -7,14 +7,16 @@ from dataclasses import dataclass, field
 from typing import List, Tuple, Optional, Callable
 
 from .constants import (
+    f_s, rt,
     BUTTON_BORDER, BUTTON_BG, BUTTON_DISABLED,
     CONTROL_PANEL_BG, CONTROL_PANEL_LINE,
     SPEED_BAR_BG, SPEED_BAR_FILL,
-    SETTINGS_DARK_BG, SETTINGS_TAB_BG, SETTINGS_ACCENT, SETTINGS_ACCENT_DARK,
+    SETTINGS_DARK_BG, SETTINGS_TAB_BG, settings_accent,
     SETTINGS_TEXT_LIGHT, SETTINGS_TEXT_DIM,
     SETTINGS_TOGGLE_ON, SETTINGS_TOGGLE_OFF,
 )
 from .utils import lighten_color, darken_color
+from .constants import CONTROL_PANEL_ROW2_Y_OFFSET
 
 
 @dataclass
@@ -49,15 +51,14 @@ class ControlPanel:
 
     def _x(self, n: int, w: int = None) -> int:
         """第 n 个按钮的 x 坐标（n 从 0 开始，间距 90）。"""
-        bw = w if w is not None else self.BUTTON_W
-        gap = 10 if bw == self.BUTTON_W else 5
-        return 15 + n * (bw + gap)
+        box_w = w if w is not None else self.BUTTON_W
+        gap = 10 if box_w == self.BUTTON_W else 5
+        return 15 + n * (box_w + gap)
 
     def _by(self) -> int:
         return self.sim.map_height + 15
 
     def _sby(self) -> int:
-        from .constants import CONTROL_PANEL_ROW2_Y_OFFSET
         return self.sim.map_height + CONTROL_PANEL_ROW2_Y_OFFSET
 
     @property
@@ -193,15 +194,14 @@ class ControlPanel:
             self._draw_button(surface, btn, dark)
 
         # 速度条
-        from .constants import f_s, rt
         by = self._by()
         sbx = self._speed_bar_x
-        tc = SETTINGS_TEXT_LIGHT if dark else (20, 40, 80)
-        speed_text = rt(f_s, f"\u901f\u5ea6: {self.sim.sp:.1f}x", tc)
+        text_color = SETTINGS_TEXT_LIGHT if dark else (20, 40, 80)
+        speed_text = rt(f_s, f"\u901f\u5ea6: {self.sim.sp:.1f}x", text_color)
         surface.blit(speed_text, (sbx, by - 3))
         speed_bar_rect = pygame.Rect(sbx, by + 15, self.SPEED_BAR_W, self.SPEED_BAR_H)
         sb_bg = SETTINGS_TOGGLE_OFF if dark else SPEED_BAR_BG
-        sb_fill = SETTINGS_ACCENT_DARK if dark else SPEED_BAR_FILL
+        sb_fill = settings_accent(dark, self.sim.color_scheme) if dark else SPEED_BAR_FILL
         pygame.draw.rect(surface, sb_bg, speed_bar_rect, 0, 6)
         sr = (self.sim.sp - self.sim.mis) / (self.sim.mas - self.sim.mis)
         fw = int(self.SPEED_BAR_W * sr)
@@ -214,9 +214,8 @@ class ControlPanel:
                       "edit": "模式: 编辑"}
         mode_label = mode_texts.get(self.sim.md, "")
         if mode_label:
-            from .constants import f_s as __f_s, rt as __rt
-            tc = SETTINGS_TEXT_LIGHT if dark else (20, 40, 80)
-            md_surf = __rt(__f_s, mode_label, tc)
+            text_color = SETTINGS_TEXT_LIGHT if dark else (20, 40, 80)
+            md_surf = rt(f_s, mode_label, text_color)
             surface.blit(md_surf, (
                 self.sim.screen_width // 2 - md_surf.get_width() // 2,
                 self.sim.screen_height - 30))
@@ -224,8 +223,7 @@ class ControlPanel:
         # 脚本运行指示
         if (hasattr(self.sim, 'script_engine') and self.sim.script_engine
                 and self.sim.script_engine.running):
-            from .constants import f_s as _f_s, rt as _rt
-            running_surf = _rt(_f_s, "\u00b7\u811a\u672c\u8fd0\u884c\u4e2d", (220, 50, 50))
+            running_surf = rt(f_s, "\u00b7\u811a\u672c\u8fd0\u884c\u4e2d", (220, 50, 50))
             script_btn = self._btn_map.get("script")
             if script_btn:
                 surface.blit(running_surf, (
@@ -237,8 +235,8 @@ class ControlPanel:
         if not btn.visible or btn.text_surf is None:
             return
         r = btn.rect
-        mx, my = pygame.mouse.get_pos()
-        hover = r.collidepoint(mx, my)
+        mouse_x, mouse_y = pygame.mouse.get_pos()
+        hover = r.collidepoint(mouse_x, mouse_y)
         pressed = hover and pygame.mouse.get_pressed()[0]
 
         if btn.disabled:

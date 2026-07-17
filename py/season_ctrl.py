@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from typing import Dict, Optional, TYPE_CHECKING
 
-from .constants import SEASON_SPEED_DEFAULT
+from .constants import SEASON_SPEED_DEFAULT, HEMISPHERE_NORTH, HEMISPHERE_SOUTH
 
 if TYPE_CHECKING:
     from .typhoon import Typhoon
@@ -29,6 +29,7 @@ class SeasonController:
         self.sty: int = 2000
         self.edy: int = 2000
         self.csa: float = 0.0
+        self._csa_base: float = 0.0
         self.current_ace_year: int = 2000
         self.ssf: float = SEASON_SPEED_DEFAULT
         self.yf: bool = False
@@ -37,6 +38,14 @@ class SeasonController:
 
     def bind(self, dialog_mgr: object = None) -> None:
         self._dialog_mgr = dialog_mgr
+
+    @property
+    def csa_base(self) -> float:
+        return self._csa_base
+
+    @csa_base.setter
+    def csa_base(self, value: float) -> None:
+        self._csa_base = value
 
     def calc_years(self) -> None:
         sty, edy = self.ace_engine.season_years()
@@ -60,9 +69,10 @@ class SeasonController:
                 new_ace_year = self.ace_engine.ace_year(new_dt)
                 if new_ace_year != self.current_ace_year:
                     self.csa = 0.0
+                    self._csa_base = 0.0
                     self.current_ace_year = new_ace_year
                     if self._dialog_mgr and self._dialog_mgr.ace_chart.active:
-                        self._dialog_mgr.ace_chart._needs_update = True
+                        self._dialog_mgr.ace_chart.needs_update = True
                 if self.sy > self.edy:
                     self.sy = self.sty
                 if self.sy == self.sty:
@@ -107,6 +117,12 @@ class SeasonController:
     def calc_accumulated_ace_up_to(self, y: int, m: int, d: int, h: int) -> float:
         return self.ace_engine.cumulative_ace_up_to(datetime(y, m, d, h))
 
+    def add_csa(self, amount: float) -> None:
+        self._csa_base += amount
+
+    def set_csa_base(self, value: float) -> None:
+        self._csa_base = value
+
     def get_ace_year(self, dt: datetime) -> int:
         return self.ace_engine.ace_year(dt)
 
@@ -123,6 +139,7 @@ class SeasonController:
                       (dt - datetime(dt.year, 1, 1, 0)).total_seconds(),
                       dt.strftime("%m%d%H"))
         self.csa = self.calc_accumulated_ace_up_to(dt.year, dt.month, dt.day, dt.hour)
+        self._csa_base = self.csa
         self.current_ace_year = self.get_ace_year(dt)
         self._start_cache.clear()
         self.yf = False
@@ -147,13 +164,17 @@ class SeasonController:
                 ty.last_ace_ci = ty.ci
 
     def reset_to_first_year(self) -> None:
-        """重置风季状态到最早年份的1月1日，并同步所有台风状态。"""
+        """重置风季状态到最早年份的1月1日（南半球则为7月1日），并同步所有台风状态。"""
         self.calc_years()
-        self.st = "010100"
+        if self.cfg.hemisphere == HEMISPHERE_SOUTH:
+            self.st = "070100"
+        else:
+            self.st = "010100"
         self.ste = 0.0
         self.sy = self.sty
+        month, day, hour = int(self.st[0:2]), int(self.st[2:4]), int(self.st[4:6])
         self.csa = 0.0
-        self.current_ace_year = self.ace_engine.ace_year(datetime(self.sty, 1, 1, 0))
+        self.current_ace_year = self.ace_engine.ace_year(datetime(self.sty, month, day, hour))
         self._start_cache.clear()
         self.yf = False
         for ty in self.repo.tys:

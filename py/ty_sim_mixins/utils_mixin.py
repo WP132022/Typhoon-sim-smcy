@@ -4,6 +4,7 @@ from __future__ import annotations
 import pygame
 import logging
 from datetime import datetime, timedelta
+from ..typhoon import TrackPoint
 
 logger = logging.getLogger(__name__)
 
@@ -95,7 +96,6 @@ class TySimUtilsMixin:
                 if area:
                     ty.basin = area.code
 
-            from ..typhoon import TrackPoint
             new_point = TrackPoint(
                 t=t, la=la, lo=lo, w=w, p=p, st=st,
                 cat=cat, color=color, color_dim=color_dim,
@@ -115,7 +115,7 @@ class TySimUtilsMixin:
             if hasattr(self, '_start_cache'):
                 self._start_cache.pop(ty, None)
 
-        except ValueError as e:
+        except ValueError:
             self.show_error("添加点失败：数值格式错误")
 
     def update_point_in_edit_typhoon(self, vals: dict, point_index: int) -> None:
@@ -176,7 +176,7 @@ class TySimUtilsMixin:
             if hasattr(self, '_start_cache'):
                 self._start_cache.pop(ty, None)
 
-        except ValueError as e:
+        except ValueError:
             self.show_error("修改点失败：数值格式错误")
         except Exception as e:
             logger.debug(f"修改点失败: {e}", exc_info=True)

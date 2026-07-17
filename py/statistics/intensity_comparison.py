@@ -2,35 +2,15 @@
 """多台风强度对比对话框：叠加多条强度曲线，x轴共用"距生成时间"。"""
 from __future__ import annotations
 import pygame
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import List, Tuple, Optional
 
 from ..constants import (
-    f_s, f_m, f_l, rt, TXT, BUTTON_BORDER, BUTTON_BG, DIALOG_TITLE_BAR_HEIGHT,
-    DB, TD, TS, C1, C2, C3, C4, C5_L, C5_M, C5_D, C2_MINUS, C3_MINUS, C4_ST, WV,
+    f_s, f_m, f_l, rt, TXT, BUTTON_BORDER, DIALOG_TITLE_BAR_HEIGHT,
 )
 from ..dialog_base import DraggableDialog
-
-# ── 12 种可区分颜色 ──
-COLORS = [
-    (220, 60, 60), (60, 160, 60), (60, 60, 220),
-    (220, 160, 0), (160, 60, 160), (60, 180, 180),
-    (220, 100, 50), (100, 200, 100), (100, 100, 255),
-    (200, 200, 50), (200, 50, 200), (50, 200, 200),
-]
-
-# ── 强度阈值 ──
-_THRESHOLDS: List[Tuple[int, Tuple[int, int, int]]] = [
-    (34,  TS),
-    (64,  C1),
-    (83,  C2_MINUS),
-    (86,  C2),
-    (96,  C3_MINUS),
-    (105, C3),
-    (113, C4),
-    (130, C4_ST),
-    (137, C5_L),
-]
+from .shared import COLORS, _THRESHOLDS
+from .intensity_chart import _FILL_BANDS
 
 _CHART_BG = (255, 255, 255, 235)
 _CHART_BORDER = TXT
@@ -96,7 +76,7 @@ class IntensityComparisonDialog(DraggableDialog):
         self._scroll_y = max(0, min(self._scroll_y, max_scroll))
 
         ch_w = w - self._margin_l - self._margin_r
-        ch_h = window_h - self._margin_t - self._margin_b
+        ch_h = self._content_h - self._margin_t - self._margin_b
         chart_left = self._margin_l
         chart_top = self._margin_t
 
@@ -120,13 +100,7 @@ class IntensityComparisonDialog(DraggableDialog):
         y_max = ((max_wind // 20) + 1) * 20 + 20
 
         # ── 强度填充带 ──
-        fill_bands = [
-            (0, 29, DB), (29, 34, TD), (34, 64, TS), (64, 83, C1),
-            (83, 86, C2_MINUS), (86, 96, C2), (96, 105, C3_MINUS), (105, 113, C3),
-            (113, 130, C4), (130, 137, C4_ST),
-            (137, 155, C5_L), (155, 170, C5_M), (170, 999, C5_D),
-        ]
-        for y_lower, y_upper, color in fill_bands:
+        for y_lower, y_upper, color in _FILL_BANDS:
             if y_lower >= y_max:
                 continue
             y_upper_clamped = min(y_upper, y_max)
@@ -231,7 +205,7 @@ class IntensityComparisonDialog(DraggableDialog):
                 info = (f"{name}  {pts_dt[i].strftime('%m/%d %HZ')}  "
                         f"{pts[i]['w']}kt  {pts[i]['st']}  "
                         f"+{hours[i]:.0f}h  "
-                        f"ACE={pts[i].get('ace', 0):.2f}")
+                        f"ACE={pts[i].get('ace', 0):.4f}")
                 self._hover_rects.append((r, info))
 
             # 名称标签（标在曲线起点旁）

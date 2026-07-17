@@ -2,10 +2,8 @@
 
 # py/statistics/data_builder_chart.py
 """数据计算：委托给 ACEEngine。"""
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import List, Tuple, Optional
-
-from ..constants import HEMISPHERE_NORTH, HEMISPHERE_SOUTH
 
 
 class ChartData:

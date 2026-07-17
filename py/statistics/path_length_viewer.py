@@ -1,20 +1,12 @@
 ﻿# py/statistics/path_length_viewer.py
 """台风路径长度查看器。支持按路径长度/台风顺序排序。"""
 from __future__ import annotations
-import math
 import pygame
 from typing import List, Tuple, Optional
 
 from ..constants import f_s, f_m, rt, TXT, BUTTON_BORDER, DIALOG_TITLE_BAR_HEIGHT
 from ..dialog_base import DraggableDialog
-
-
-def _haversine(lat1, lon1, lat2, lon2):
-    lat1, lon1, lat2, lon2 = map(math.radians, [lat1, lon1, lat2, lon2])
-    dlat = lat2 - lat1
-    dlon = lon2 - lon1
-    a = math.sin(dlat / 2) ** 2 + math.cos(lat1) * math.cos(lat2) * math.sin(dlon / 2) ** 2
-    return 2 * math.asin(math.sqrt(a)) * 6371
+from .chart_helpers import _haversine
 
 
 def _ts_eligible(pt: dict) -> bool:

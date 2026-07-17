@@ -7,8 +7,10 @@ from typing import List, Optional, TYPE_CHECKING
 
 from .typhoon import Typhoon
 from .landfall_effect import LandfallEffect, LandfallEffectSMCY
-from .particle_effect import RIEffect, play_eri_sound
-from .constants import FADE_DURATION, ICON_SET_SMCY
+from .particle_effect import RIEffect, TSNoteEffect, play_eri_sound, play_note_ts_sound
+from .ace_engine import _ace_eligible
+from .utils import get_tropical_points
+from .constants import FADE_DURATION, ICON_SET_SMCY, MODE_NORMAL, MODE_SEASON, MODE_EDIT
 
 if TYPE_CHECKING:
     from .data_repo import DataRepository
@@ -18,9 +20,11 @@ if TYPE_CHECKING:
     from .resource_manager import ResourceManager, MapManager
     from .season_ctrl import SeasonController
 
-_MODE_NORMAL = "normal"
-_MODE_SEASON = "season"
-_MODE_EDIT = "edit"
+
+RI_COOLDOWN = 1.0    # points_time 单位，1.0 = 12h 冷却
+RI_WIND_INCREASE_KT = 60
+RI_OFFICIAL_INTERVALS = 4
+FADE_COOLDOWN_MS = 500
 
 
 class PlaybackController:
@@ -38,43 +42,47 @@ class PlaybackController:
         self.effects: List[LandfallEffect] = []
         self.landfall_records: list = []
         self._pl: bool = False
+        self._interp_ci_map: dict = {}
+        self.ace_note: Optional[dict] = None
+        self._was_fin: dict = {}
 
     def latlon_to_screen(self, la: float, lo: float) -> tuple:
         return self.view.latlon_to_screen(la, lo)
 
     def update_all(self, ct: float, dt: float, dialog_open: bool,
                     season_ctrl: Optional[SeasonController] = None) -> None:
-        from . import perf
         paused = not self._pl or dialog_open
         md = self.cfg.md
-        current = self.repo.current_typhoon() if md == _MODE_NORMAL else None
+        current = self.repo.current_typhoon() if md == MODE_NORMAL else None
         self.map_mgr.update_land_mask()
-        for ty in self.repo.tys:
-            if ty.act:
-                ty.us(dt)
-            self._fade_one(ty, ct)
-            self._check_landfall(ty, ct, season_ctrl)
-            if not ty.act:
+        for typhoon in self.repo.tys:
+            if typhoon.act:
+                typhoon.us(dt)
+            self._fade_one(typhoon, ct)
+            self._check_landfall(typhoon, ct, season_ctrl)
+            self._check_finish_note(typhoon, ct)
+            if not typhoon.act:
                 continue
-            if md == _MODE_NORMAL:
-                if ty == current:
-                    self._update_normal(ty, ct, paused)
-            elif md == _MODE_SEASON:
-                if ty.ss and not ty.sf:
-                    self._update_season(ty, ct, paused, season_ctrl)
-            elif md == _MODE_EDIT:
-                if self.repo.edit_typhoon == ty:
-                    self._update_edit(ty, ct, paused)
+            if md == MODE_NORMAL:
+                if typhoon == current:
+                    self._update_normal(typhoon, ct, paused)
+            elif md == MODE_SEASON:
+                if typhoon.ss and not typhoon.sf:
+                    self._update_season(typhoon, ct, paused, season_ctrl)
+            elif md == MODE_EDIT:
+                if self.repo.edit_typhoon == typhoon:
+                    self._update_edit(typhoon, ct, paused)
         self.effects = [e for e in self.effects if e.update(ct)]
-        if md == _MODE_SEASON and not paused and season_ctrl and self.cfg.ace_interpolated:
+        if md == MODE_SEASON and not paused and season_ctrl and self.cfg.ace_interpolated:
             season_ctrl.csa = self._compute_interpolated_csa(season_ctrl)
-            perf.tick("    ace_interp")
+        elif season_ctrl is not None:
+            season_ctrl.set_csa_base(season_ctrl.csa)
 
-    def _fade_one(self, ty: Typhoon, ct: float) -> None:
-        if ty.finish_time <= 0:
+    def _fade_one(self, typhoon: Typhoon, ct: float) -> None:
+        if typhoon.finish_time <= 0:
             return
-        elapsed = (ct - ty.finish_time) / 1000.0
-        v = ty.v
+        elapsed = (ct - typhoon.finish_time) / 1000.0
+        v = typhoon.v
         if self.cfg.fade_typhoon:
             v.icon_alpha = max(0, int(255 * (1.0 - elapsed / FADE_DURATION)))
         else:
@@ -84,117 +92,127 @@ class PlaybackController:
         else:
             v.path_alpha = 0
 
-    def _update_normal(self, ty: Typhoon, ct: float, paused: bool) -> None:
-        pts = ty.pts
+    def _update_normal(self, typhoon: Typhoon, ct: float, paused: bool) -> None:
+        pts = typhoon.pts
         if len(pts) == 1:
-            ty._mark_finished(ct)
-        elif ty.fin:
-            if ct - ty.ft >= 500:
-                ty.fin = False
+            typhoon._mark_finished(ct)
+        elif typhoon.fin:
+            if ct - typhoon.ft >= FADE_COOLDOWN_MS:
+                typhoon.fin = False
                 if self.cfg.ac and self.repo.tys:
                     self.repo.cti = (self.repo.cti + 1) % len(self.repo.tys)
-                    self.repo.current_typhoon().rst()
+                    if self.repo.current_typhoon():
+                        self.repo.current_typhoon().rst()
         else:
-            prev_ci = ty.ci
-            if not ty.v.ipos and ty.ci < len(pts) - 1:
-                ty.sm(ct)
-            ty.um(ct, self.cfg.sp, paused)
-            if ty.ci != prev_ci:
-                self._check_particle_effects(ty, prev_ci, ct)
-        ty.cace = (ty.interpolated_cace() if self.cfg.ace_interpolated
-                   else (pts[ty.ci]['ace'] if pts and ty.ci < len(pts) else 0.0))
+            prev_ci = typhoon.ci
+            if not typhoon.v.ipos and typhoon.ci < len(pts) - 1:
+                typhoon.sm(ct)
+            typhoon.um(ct, self.cfg.sp, paused)
+            if typhoon.ci != prev_ci:
+                self._check_particle_effects(typhoon, prev_ci, ct)
+        typhoon.cace = (typhoon.interpolated_cace() if self.cfg.ace_interpolated
+                   else (pts[typhoon.ci]['ace'] if pts and typhoon.ci < len(pts) else 0.0))
 
-    def _update_season(self, ty: Typhoon, ct: float, paused: bool,
+    def _update_season(self, typhoon: Typhoon, ct: float, paused: bool,
                        season_ctrl: Optional[SeasonController] = None) -> None:
-        pts = ty.pts
-        if season_ctrl and ty.ci == 0 and ty.last_ace_ci == -1:
+        pts = typhoon.pts
+        if season_ctrl and typhoon.ci == 0 and typhoon.last_ace_ci == -1:
             pt = pts[0]
             if pt.get('pace', 0) > 0 and pt.get('ace_year', 0) == season_ctrl.current_ace_year:
                 if self.ace_engine.point_in_limit(pt['la'], pt['lo']):
-                    season_ctrl.csa += pt['pace']
-            ty.last_ace_ci = 0
+                    season_ctrl.add_csa(pt['pace'])
+            typhoon.last_ace_ci = 0
         if len(pts) == 1:
-            ty._mark_finished(ct)
-            ty.sf = True
-        elif not ty.fin:
-            prev_ci = ty.ci
-            if not ty.v.ipos and ty.ci < len(pts) - 1:
-                ty.sm(ct)
-            ty.um(ct, self.cfg.sp, paused)
-            if ty.ci != prev_ci:
-                self._check_particle_effects(ty, prev_ci, ct)
-            if not paused and season_ctrl and ty.ci > ty.last_ace_ci:
-                for i in range(ty.last_ace_ci + 1, ty.ci + 1):
+            typhoon._mark_finished(ct)
+            typhoon.sf = True
+        elif not typhoon.fin:
+            prev_ci = typhoon.ci
+            if not typhoon.v.ipos and typhoon.ci < len(pts) - 1:
+                typhoon.sm(ct)
+            typhoon.um(ct, self.cfg.sp, paused)
+            if typhoon.ci != prev_ci:
+                self._check_particle_effects(typhoon, prev_ci, ct)
+            if not paused and season_ctrl and typhoon.ci > typhoon.last_ace_ci:
+                for i in range(typhoon.last_ace_ci + 1, typhoon.ci + 1):
                     pt = pts[i]
                     if pt.get('pace', 0) > 0 and pt.get('ace_year', 0) == season_ctrl.current_ace_year:
                         if self.ace_engine.point_in_limit(pt['la'], pt['lo']):
-                            season_ctrl.csa += pt['pace']
-                ty.last_ace_ci = ty.ci
-            if ty.fin:
-                ty.sf = True
-                ty.act = False
+                            season_ctrl.add_csa(pt['pace'])
+            typhoon.last_ace_ci = typhoon.ci
+            if typhoon.fin:
+                typhoon.sf = True
+                typhoon.act = False
+                if self.cfg.show_summary:
+                    from .summary_effect import TyphoonSummary
+                    if TyphoonSummary.available_for(typhoon):
+                        self.effects.append(TyphoonSummary(typhoon, ct))
 
-        ty.cace = (ty.interpolated_cace() if self.cfg.ace_interpolated
-                   else (pts[ty.ci]['ace'] if pts else 0.0))
+        typhoon.cace = (typhoon.interpolated_cace() if self.cfg.ace_interpolated
+                   else (pts[typhoon.ci]['ace'] if pts else 0.0))
 
     def _compute_interpolated_csa(self,
                                     season_ctrl: SeasonController) -> float:
         """基于增量 CSA 只对活跃台风的当前点做插值修正，不再扫描全部台风×全部点。"""
         cur_year = season_ctrl.current_ace_year
-        total = season_ctrl.csa
-        for ty in self.repo.tys:
-            if not ty.act or not ty.ss or ty.sf or ty.fin:
+        total = season_ctrl.csa_base
+        for typhoon in self.repo.tys:
+            if not typhoon.act or not typhoon.ss or typhoon.sf or typhoon.fin:
                 continue
-            if ty.ci < 0 or ty.ci >= len(ty.pts) - 1:
+            if typhoon.ci < 0 or typhoon.ci >= len(typhoon.pts) - 1:
                 continue
-            pts = ty.pts
-            pt_cur = pts[ty.ci]
-            if pt_cur.get('pace', 0) > 0 and pt_cur.get('ace_year', 0) == cur_year:
-                if self.ace_engine.point_in_limit(pt_cur['la'], pt_cur['lo']):
-                    total -= pt_cur['pace']
-            pt_next = pts[ty.ci + 1]
+            pts = typhoon.pts
+            prev_ci = self._interp_ci_map.get(typhoon, -1)
+            cur_ci = typhoon.ci
+            if prev_ci >= 0 and cur_ci > prev_ci:
+                for i in range(prev_ci + 1, cur_ci + 1):
+                    p = pts[i]
+                    if p.get('pace', 0) > 0 and p.get('ace_year', 0) == cur_year:
+                        if self.ace_engine.point_in_limit(p['la'], p['lo']):
+                            total += p['pace']
+            self._interp_ci_map[typhoon] = cur_ci
+            pt_next = pts[typhoon.ci + 1]
             if pt_next.get('pace', 0) > 0 and pt_next.get('ace_year', 0) == cur_year:
                 if self.ace_engine.point_in_limit(pt_next['la'], pt_next['lo']):
-                    pt0 = ty.points_time[ty.ci]
-                    pt1 = ty.points_time[ty.ci + 1]
+                    pt0 = typhoon.points_time[typhoon.ci]
+                    pt1 = typhoon.points_time[typhoon.ci + 1]
                     if pt1 > pt0:
-                        t = max(0.0, min(1.0, (ty.at - pt0) / (pt1 - pt0)))
+                        t = max(0.0, min(1.0, (typhoon.at - pt0) / (pt1 - pt0)))
                         total += pt_next['pace'] * t
         return total
 
-    def _update_edit(self, ty: Typhoon, ct: float, paused: bool) -> None:
-        pts = ty.pts
+    def _update_edit(self, typhoon: Typhoon, ct: float, paused: bool) -> None:
+        pts = typhoon.pts
         if len(pts) == 1:
-            ty._mark_finished(ct)
-        elif ty.fin:
-            if ct - ty.ft >= 500:
-                ty.fin = False
+            typhoon._mark_finished(ct)
+        elif typhoon.fin:
+            if ct - typhoon.ft >= FADE_COOLDOWN_MS:
+                typhoon.fin = False
                 self._pl = False
-                ty.rst()
+                typhoon.rst()
         else:
-            if not ty.v.ipos and ty.ci < len(pts) - 1:
-                ty.sm(ct)
-            ty.um(ct, self.cfg.sp, paused)
-        ty.cace = (ty.interpolated_cace() if self.cfg.ace_interpolated
-                   else (pts[ty.ci]['ace'] if pts and ty.ci < len(pts) else 0.0))
+            if not typhoon.v.ipos and typhoon.ci < len(pts) - 1:
+                typhoon.sm(ct)
+            typhoon.um(ct, self.cfg.sp, paused)
+        typhoon.cace = (typhoon.interpolated_cace() if self.cfg.ace_interpolated
+                   else (pts[typhoon.ci]['ace'] if pts and typhoon.ci < len(pts) else 0.0))
 
-    def _check_landfall(self, ty: Typhoon, ct: float,
+    def _check_landfall(self, typhoon: Typhoon, ct: float,
                         season_ctrl: Optional[SeasonController] = None) -> None:
-        if not ty.act:
+        if not typhoon.act:
             return
         ace_limit_mode = self.cfg.ace_limit_mode
         if ace_limit_mode == "basin" and self.cfg.ace_limit_basin:
             area = self.res_mgr.ocean_areas.get_by_code(self.cfg.ace_limit_basin)
-            if area is not None and not self.repo._ty_in_filter_basin(ty, area):
-                pos = ty.cpos()
+            if area is not None and not self.repo._ty_in_filter_basin(typhoon, area):
+                pos = typhoon.cpos()
                 if pos:
                     x, y = self.view.latlon_to_screen(pos['la'], pos['lo'])
                     w, h = self.view.screen_width, self.view.map_height
                     if 0 <= x < w and 0 <= y < h:
                         if self.map_mgr.land_img is not None:
-                            ty.v.last_on_land = self.map_mgr.is_land_at_screen(x, y)
+                            typhoon.v.last_on_land = self.map_mgr.is_land_at_screen(x, y)
                 return
-        pos = ty.cpos()
+        pos = typhoon.cpos()
         if not pos:
             return
         x, y = self.view.latlon_to_screen(pos['la'], pos['lo'])
@@ -204,31 +222,37 @@ class PlaybackController:
         if self.map_mgr.land_img is None:
             return
         is_land = self.map_mgr.is_land_at_screen(x, y)
-        v = ty.v
+        v = typhoon.v
         if is_land and not v.last_on_land:
-            cp = ty.cp()
-            if cp:
-                adv_x, adv_y = self.view.latlon_to_screen(cp['la'], cp['lo'])
+            current_point = typhoon.cp()
+            if current_point:
+                adv_x, adv_y = self.view.latlon_to_screen(current_point['la'], current_point['lo'])
                 adv_on_land = (0 <= adv_x < w and 0 <= adv_y < h
                                and self.map_mgr.is_land_at_screen(adv_x, adv_y))
-                if adv_on_land and ty.ci > 0:
-                    prev_pt = ty.pts[ty.ci - 1]
-                    landfall_wind = prev_pt.get('w', cp.get('w', 0))
-                    landfall_st = prev_pt.get('st', cp.get('st', ''))
+                if adv_on_land and typhoon.ci > 0:
+                    prev_pt = typhoon.pts[typhoon.ci - 1]
+                    landfall_wind = prev_pt.get('w', current_point.get('w', 0))
+                    landfall_st = prev_pt.get('st', current_point.get('st', ''))
+                    landfall_pres = prev_pt.get('p', 0) or current_point.get('p', 0)
                 else:
-                    landfall_wind = cp.get('w', 0)
-                    landfall_st = cp.get('st', '')
+                    landfall_wind = current_point.get('w', 0)
+                    landfall_st = current_point.get('st', '')
+                    landfall_pres = current_point.get('p', 0)
                 strength = self.repo.get_strength_category(landfall_wind, landfall_st)
                 ace_year = season_ctrl.current_ace_year if season_ctrl else 2000
                 self.landfall_records.append({
-                    'name': self.repo.get_display_name(ty),
+                    'name': self.repo.get_display_name(typhoon),
                     'wind': landfall_wind,
                     'year': ace_year,
-                    'basin': ty.basin,
+                    'basin': typhoon.basin,
                     'la': pos['la'],
                     'lo': pos['lo'],
                 })
-                if ty.ci != 0:
+                if typhoon.ci != 0:
+                    lf_color = self.repo.get_point_color(landfall_wind, landfall_st)
+                    lf_label = f"{landfall_wind}kt"
+                    if landfall_pres:
+                        lf_label += f" {landfall_pres}mb"
                     if self.cfg.icon_set == ICON_SET_SMCY:
                         from .smcy_icon import get_landfall_frames
                         icon_factor = self.cfg.icon_size / 100.0
@@ -237,35 +261,88 @@ class PlaybackController:
                         if frames:
                             self.effects.append(LandfallEffectSMCY(
                                 strength, pos['lo'], pos['la'], frames, ct,
-                                self.view.latlon_to_screen))
+                                self.view.latlon_to_screen,
+                                label=lf_label, label_color=lf_color))
                     else:
                         img1, img2 = self.res_mgr.get_landfall_images(strength)
                         if img1 and img2:
                             self.effects.append(LandfallEffect(
                                 strength, pos['lo'], pos['la'], img1, img2, ct,
-                                self.view.latlon_to_screen))
+                                self.view.latlon_to_screen,
+                                label=lf_label, label_color=lf_color))
                     sound = self.res_mgr.get_sound(strength)
                     if sound:
                         sound.set_volume(self.cfg.volume)
                         sound.play()
         v.last_on_land = is_land
 
-    def _check_particle_effects(self, ty: Typhoon, prev_ci: int, ct: float) -> None:
-        """检测 RI 事件（唯一标准：24h 增强 ≥60kt，24h 内最多触发一次）。"""
-        pts = ty.pts
-        new_ci = ty.ci
+    def _check_finish_note(self, typhoon: Typhoon, ct: float) -> None:
+        """台风结束时记录 ACE 提示：进度条左侧显示 '台风名 +ACE'。"""
+        fin_now = typhoon.fin or typhoon.sf
+        if fin_now and not self._was_fin.get(typhoon, False):
+            name = typhoon.sname or typhoon.cust or ''
+            tropical = get_tropical_points(typhoon.pts)
+            if tropical:
+                mwp = max(tropical, key=lambda p: p['w'])
+                color = tuple(mwp.get('color', (200, 200, 200)))
+            else:
+                color = (200, 200, 200)
+            self.ace_note = {'name': name, 'ace': typhoon.tace,
+                             'color': color, 'time': ct}
+        self._was_fin[typhoon] = fin_now
+
+    def _check_particle_effects(self, typhoon: Typhoon, prev_ci: int, ct: float) -> None:
+        self._check_ts_note(typhoon, prev_ci, ct)
+        self._check_ri_effect(typhoon, prev_ci, ct)
+
+    def _icon_factor(self) -> float:
+        f = self.cfg.icon_size / 100.0
+        mv = self.map_mgr.map_view
+        if self.cfg.fix_icon_point_size and mv and mv.min_scale > 0:
+            f *= mv.scale / (mv.min_scale * 2.5)
+        return f
+
+    def _check_ts_note(self, typhoon: Typhoon, prev_ci: int, ct: float) -> None:
+        """检测从不可计算 ACE 的类型加强为 TS，在台风位置播放 note_ts 特效。"""
+        pts = typhoon.pts
+        new_ci = typhoon.ci
+        if new_ci <= prev_ci or len(pts) < 2:
+            return
+        for i in range(max(prev_ci + 1, 1), min(new_ci, len(pts) - 1) + 1):
+            if pts[i]['st'].upper() == 'TS' and not _ace_eligible(pts[i - 1]):
+                self.effects.append(TSNoteEffect(
+                    typhoon, ct, self.view.latlon_to_screen,
+                    self._icon_factor,
+                    smcy=self.cfg.icon_set == ICON_SET_SMCY))
+                play_note_ts_sound(self.cfg.volume)
+                break
+
+    def _check_ri_effect(self, typhoon: Typhoon, prev_ci: int, ct: float) -> None:
+        """检测 RI 事件：在所有官方报对中找后-前风速差最大者，≥60kt 且冷却满 12h 时触发。"""
+        if not self.cfg.show_ri_effect:
+            return
+        pts = typhoon.pts
+        new_ci = typhoon.ci
         if new_ci == prev_ci or new_ci <= 0 or len(pts) < 2:
             return
-        icon_factor = self.cfg.icon_size / 100.0
-        # RI 24h 冷却检查 (2.0 points_time = 24h)
-        if ty.at - ty.v._last_ri_at < 2.0:
+        # 12h 冷却
+        if typhoon.at - typhoon.v._last_ri_at < RI_COOLDOWN:
             return
-        # RI 唯一标准: 24h 增强 ≥60kt（4 个官方报间隔）
+        # 扫描所有官方报对，找后-前风速差最大者
         officials = [i for i, p in enumerate(pts) if p.get('official', False)]
-        for idx in range(len(officials) - 4):
-            b, b4 = officials[idx], officials[idx + 4]
-            if b4 == new_ci and pts[b4]['w'] - pts[b]['w'] >= 60:
-                self.effects.append(RIEffect(ty, ct, self.view.latlon_to_screen, icon_factor))
-                play_eri_sound(self.cfg.volume)
-                ty.v._last_ri_at = ty.at
-                return
+        best_diff = 0
+        best_i = -1
+        for j in range(1, len(officials)):
+            pj = officials[j]
+            for k in range(min(j, RI_OFFICIAL_INTERVALS)):
+                pi = officials[j - k - 1]
+                diff = pts[pj]['w'] - pts[pi]['w']
+                if diff >= RI_WIND_INCREASE_KT and diff > best_diff:
+                    best_diff = diff
+                    best_i = pi
+        if best_i >= 0:
+            icon_factor = self.cfg.icon_size / 100.0
+            self.effects.append(RIEffect(typhoon, ct, self.view.latlon_to_screen,
+                                          icon_factor, start_at=typhoon.points_time[best_i] if typhoon.points_time else 0))
+            play_eri_sound(self.cfg.volume)
+            typhoon.v._last_ri_at = typhoon.at

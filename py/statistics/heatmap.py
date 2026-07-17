@@ -1,48 +1,67 @@
 ﻿# py/statistics/path_heatmap.py
-"""台风 ACE 热力图对话框 — 径向累积 + 线性色彩渐变。"""
+"""台风 ACE 热力图对话框 — 径向累积 + ace-heat.png 色彩映射。"""
 from __future__ import annotations
 import math
+import os
 import pygame
+from PIL import Image as PILImage
 from typing import Optional
 
-from ..constants import f_s, f_m, rt, TXT, DIALOG_TITLE_BAR_HEIGHT
+from ..constants import f_s, f_m, rt, TXT, DIALOG_TITLE_BAR_HEIGHT, SUCAI_DIR, SETTINGS_TEXT_DIM
 from ..dialog_base import DraggableDialog
 
 
-# ── 色彩渐变停靠点 (value, (R, G, B, A)) ──
-_COLOR_STOPS = [
-    (0.0,  (0,   0,   0,   0)),
-    (0.75, (255, 255, 255, 255)),
-    (2.0,  (255, 255, 0,   255)),
-    (5.0,  (255, 0,   0,   255)),
-    (8.0,  (128, 0,   128, 255)),
-    (20.0, (0,   0,   0,   255)),
-]
+# ── ace-heat.png 色表加载 ──
+_heat_img = None
+_HEAT_H = 0
 
 
-def _value_to_rgba(value: float) -> tuple:
-    """将 ACE 热力值映射为 (R, G, B, A)。"""
+def _load_heat():
+    global _heat_img, _HEAT_H
+    if _heat_img is not None:
+        return
+    path = os.path.join(SUCAI_DIR, 'SMCY', 'resource', 'ace-heat.png')
+    if os.path.exists(path):
+        img = PILImage.open(path)
+        _heat_img = img.convert('RGBA')
+        _HEAT_H = _heat_img.height - 1
 
-    if value <= 0:
-        return (0, 0, 0, 0)
-    if value >= 20.0:
-        return (0, 0, 0, 255)
-    for i in range(len(_COLOR_STOPS) - 1):
-        v0, c0 = _COLOR_STOPS[i]
-        v1, c1 = _COLOR_STOPS[i + 1]
-        if v0 <= value <= v1:
-            t = (value - v0) / (v1 - v0)
-            return tuple(int(c0[j] + (c1[j] - c0[j]) * t) for j in range(4))
-    return (0, 0, 0, 0)
+
+def _ace_heat_color(value: float) -> tuple:
+    """从 ace-heat.png 采样颜色，value ∈ [0, 8]."""
+    _load_heat()
+    if _heat_img is None or _HEAT_H <= 0:
+        if value <= 0:
+            return (0, 0, 0, 0)
+        if value >= 8:
+            return (0, 0, 0, 255)
+        t = value / 8.0
+        return (int(t * 255), int((1 - t) * 255), 0, 255)
+    v = max(0.0, min(value, 8.0))
+    y = int((1.0 - v / 8.0) * _HEAT_H)
+    pixel = _heat_img.getpixel((0, y))
+    return pixel[:4]
 
 
 class PathHeatmapDialog(DraggableDialog):
+    RANGE_AUTO = 0
+    RANGE_SETTINGS = 1
+    RANGE_CUSTOM = 2
+
     def __init__(self, sim):
         super().__init__(sim)
         self.title_bar_height = DIALOG_TITLE_BAR_HEIGHT
         self._year: int = 0
         self._cached_surf: Optional[pygame.Surface] = None
         self._close_btn_rect = pygame.Rect(0, 0, 0, 0)
+        self._range_mode = self.RANGE_AUTO
+        self._custom_mlon = 0.0
+        self._custom_Mlon = 360.0
+        self._custom_mlat = -90.0
+        self._custom_Mlat = 90.0
+        self._custom_active = False
+        self._custom_fields = []
+        self._custom_field_active = -1
 
     def activate(self):
         super().activate()
@@ -81,9 +100,16 @@ class PathHeatmapDialog(DraggableDialog):
             return
 
         # ── 地理边界 ──
-        margin = 5.0
-        mlon, Mlon = min(all_lons) - margin, max(all_lons) + margin
-        mlat, Mlat = min(all_lats) - margin, max(all_lats) + margin
+        if self._range_mode == self.RANGE_AUTO:
+            margin = 5.0
+            mlon, Mlon = min(all_lons) - margin, max(all_lons) + margin
+            mlat, Mlat = min(all_lats) - margin, max(all_lats) + margin
+        elif self._range_mode == self.RANGE_SETTINGS:
+            mlon, Mlon = self.sim.mlo, self.sim.Mlo
+            mlat, Mlat = self.sim.mla, self.sim.Mla
+        else:
+            mlon, Mlon = self._custom_mlon, self._custom_Mlon
+            mlat, Mlat = self._custom_mlat, self._custom_Mlat
         if Mlon - mlon < 2:
             Mlon = mlon + 2
         if Mlat - mlat < 2:
@@ -151,7 +177,7 @@ class PathHeatmapDialog(DraggableDialog):
             for x in range(bw):
                 v = heat[row + x]
                 if v > 0:
-                    c = pygame.Color(*_value_to_rgba(v))
+                    c = pygame.Color(*_ace_heat_color(v))
                     px_array[x, y] = heat_surf.map_rgb(c)
         px_array.close()
         surf.blit(heat_surf, (bx, by))
@@ -173,9 +199,9 @@ class PathHeatmapDialog(DraggableDialog):
 
         # 渐变条
         for py in range(legend_h):
-            t = 1.0 - py / legend_h  # 顶部=高值, 底部=低值
-            value = t * 20.0  # 0..20
-            rgba = _value_to_rgba(value)
+            t = 1.0 - py / legend_h
+            value = t * 8.0
+            rgba = _ace_heat_color(value)
             color = pygame.Color(*rgba)
             pygame.draw.line(surface, color,
                            (legend_x, legend_y + py),
@@ -186,7 +212,7 @@ class PathHeatmapDialog(DraggableDialog):
         # 标签
         for val_pct in [0, 0.25, 0.5, 0.75, 1.0]:
             y = legend_y + int((1.0 - val_pct) * legend_h)
-            value = val_pct * 20.0
+            value = val_pct * 8.0
             lbl = rt(f_s, f"{value:.0f}", TXT)
             surface.blit(lbl, (legend_x + legend_w + 6, y - lbl.get_height() // 2))
         # 标题
@@ -208,9 +234,45 @@ class PathHeatmapDialog(DraggableDialog):
         title = rt(f_m, f"路径密度热力图 - {self._year}", TXT)
         surface.blit(title, (bx + 12, by + 8))
 
+        # 右上角范围模式切换（记录按钮位置供 handle_event 检测）
+        self._mode_btns = []
+        mode_names = ["自动", "设置", "自定义"]
+        for i, name in enumerate(mode_names):
+            r = pygame.Rect(bx + bw - 280 + i * 85, by + 6, 75, 22)
+            self._mode_btns.append(r)
+            is_on = self._range_mode == i
+            if not self.dark_mode:
+                bg = (100, 150, 200) if is_on else (180, 190, 210)
+                tc = (255, 255, 255)
+            elif is_on:
+                bg = (70, 130, 180)
+                tc = (20, 25, 35)
+            else:
+                bg = (50, 55, 70)
+                tc = SETTINGS_TEXT_DIM
+            pygame.draw.rect(surface, bg, r, border_radius=6)
+            ts = rt(f_s, name, tc)
+            surface.blit(ts, (r.x + (r.w - ts.get_width()) // 2, r.y + (r.h - ts.get_height()) // 2))
+
+        # 关闭按钮
         cb = pygame.Rect(bx + bw - 90, by + 8, 55, 25)
         self._close_btn_rect = cb
         self.draw_button(surface, cb, rt(f_s, "关闭", (255, 255, 255)))
+
+        # 自定义范围输入
+        if self._range_mode == self.RANGE_CUSTOM:
+            cy = by + 34
+            labels = ["西", "东", "南", "北"]
+            vals = [f"{self._custom_mlon:.0f}", f"{self._custom_Mlon:.0f}",
+                    f"{self._custom_mlat:.0f}", f"{self._custom_Mlat:.0f}"]
+            for i, (lbl, val) in enumerate(zip(labels, vals)):
+                lx = bx + bw - 280 + i * 68
+                surface.blit(rt(f_s, lbl, TXT), (lx, cy))
+                fr = pygame.Rect(lx + 16, cy, 46, 22)
+                pygame.draw.rect(surface, (255, 255, 255), fr, 0, 3)
+                pygame.draw.rect(surface, (100, 150, 200), fr, 1, 3)
+                vs = rt(f_s, val, TXT)
+                surface.blit(vs, (fr.x + 3, fr.y + 3))
 
     def handle_event(self, e: pygame.event.Event) -> bool:
         if not self.active:
@@ -219,6 +281,11 @@ class PathHeatmapDialog(DraggableDialog):
             if self._close_btn_rect.collidepoint(e.pos):
                 self.deactivate()
                 return True
+            for i, r in enumerate(getattr(self, '_mode_btns', [])):
+                if r.collidepoint(e.pos):
+                    self._range_mode = i
+                    self._cached_surf = None
+                    return True
         if self.handle_drag_event(e):
             return True
         if e.type == pygame.KEYDOWN and e.key == pygame.K_ESCAPE:

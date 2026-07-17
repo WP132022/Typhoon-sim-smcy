@@ -158,14 +158,14 @@ class TyList(DraggableDialog):
 
     def _action_buttons(self):
         lx, ly, lw, lh = self.bg_rect
-        bw, bh, gap = 80, 25, 10
-        tw = 3 * bw + 2 * gap
+        box_w, box_h, gap = 80, 25, 10
+        tw = 3 * box_w + 2 * gap
         sx = lx + (lw - tw) // 2
         y = ly + lh - 45
         return {
-            'name': pygame.Rect(sx, y, bw, bh),
-            'number': pygame.Rect(sx + bw + gap, y, bw, bh),
-            'filename': pygame.Rect(sx + 2 * (bw + gap), y, bw, bh),
+            'name': pygame.Rect(sx, y, box_w, box_h),
+            'number': pygame.Rect(sx + box_w + gap, y, box_w, box_h),
+            'filename': pygame.Rect(sx + 2 * (box_w + gap), y, box_w, box_h),
         }
 
     def _jump_btn(self):
@@ -326,7 +326,7 @@ class TyList(DraggableDialog):
 
         chart = getattr(getattr(self.sim, 'dialog_mgr', None), 'ace_chart', None)
         if chart and chart.active:
-            chart._needs_update = True
+            chart.needs_update = True
 
     def _keydown(self, e):
         if e.key == pygame.K_ESCAPE:
@@ -404,8 +404,6 @@ class TyList(DraggableDialog):
         self.ei = -1
         self.edit_type = None
         self.edit_field = None
-        self._row_cache.pop(self.ei, None)
-        self._row_hashes.pop(self.ei, None)
 
     def _handle_jump(self, e):
         if e.type == pygame.KEYDOWN:
@@ -492,8 +490,8 @@ class TyList(DraggableDialog):
 
             if self.ei == oi and self.edit_type in ('number', 'filename'):
                 if self.edit_field is None:
-                    r = (lx + 30, y + 35, 200, 25)
-                    self.edit_field = InputField(r, max_length=20)
+                    rect = (lx + 30, y + 35, 200, 25)
+                    self.edit_field = InputField(rect, max_length=20)
                     if self.edit_type == 'number':
                         self.edit_field.set_text(ty.n)
                     else:
@@ -525,15 +523,15 @@ class TyList(DraggableDialog):
             ov = pygame.Surface((self.sim.screen_width, self.sim.screen_height), pygame.SRCALPHA)
             ov.fill((0, 0, 0, 100))
             surface.blit(ov, (0, 0))
-            ir = pygame.Rect(self.sim.screen_width // 2 - 100, self.sim.screen_height // 2 - 30, 200, 40)
-            pygame.draw.rect(surface, (255, 255, 255), ir)
-            pygame.draw.rect(surface, BUTTON_BORDER, ir, 2)
+            item_rect = pygame.Rect(self.sim.screen_width // 2 - 100, self.sim.screen_height // 2 - 30, 200, 40)
+            pygame.draw.rect(surface, (255, 255, 255), item_rect)
+            pygame.draw.rect(surface, BUTTON_BORDER, item_rect, 2)
             prompt = rt(f_s, f"输入页码 (1-{self.get_total_pages()}):", TXT)
-            surface.blit(prompt, (ir.x, ir.y - 25))
+            surface.blit(prompt, (item_rect.x, item_rect.y - 25))
             it = rt(f_s, self.jump_input + ("_" if pygame.time.get_ticks() % 1000 < 500 else ""), TXT)
-            surface.blit(it, (ir.x + 5, ir.y + 10))
-            cb = pygame.Rect(ir.x + 20, ir.y + 50, 60, 30)
-            ca = pygame.Rect(ir.x + 120, ir.y + 50, 60, 30)
+            surface.blit(it, (item_rect.x + 5, item_rect.y + 10))
+            cb = pygame.Rect(item_rect.x + 20, item_rect.y + 50, 60, 30)
+            ca = pygame.Rect(item_rect.x + 120, item_rect.y + 50, 60, 30)
             self.draw_button(surface, cb, self.confirm_text, BUTTON_BORDER)
             self.draw_button(surface, ca, self.cancel_text, BUTTON_DISABLED)
             self.jump_confirm_btn = cb
@@ -549,25 +547,25 @@ class TyList(DraggableDialog):
         ty = self.sim.tys[self.hi]
         if not ty.pts:
             return
-        mx, my = pygame.mouse.get_pos()
+        mouse_x, mouse_y = pygame.mouse.get_pos()
         tw, th = 280, 180
-        tx = min(mx + 20, self.sim.screen_width - tw - 10)
-        ty2 = min(my + 20, self.sim.screen_height - th - 10)
-        ts = pygame.Surface((tw, th), pygame.SRCALPHA)
-        ts.fill((255, 255, 255, 230))
-        pygame.draw.rect(ts, BUTTON_BORDER, (0, 0, tw, th), 2, 8)
+        tx = min(mouse_x + 20, self.sim.screen_width - tw - 10)
+        ty2 = min(mouse_y + 20, self.sim.screen_height - th - 10)
+        text_surface = pygame.Surface((tw, th), pygame.SRCALPHA)
+        text_surface.fill((255, 255, 255, 230))
+        pygame.draw.rect(text_surface, BUTTON_BORDER, (0, 0, tw, th), 2, 8)
 
         dn = self.sim.get_display_name(ty)
-        ts.blit(rt(f_m, f"台风: {dn}", TXT), (10, 10))
-        ts.blit(rt(f_s, f"总点数: {len(ty.pts)}", TXT), (10, 40))
+        text_surface.blit(rt(f_m, f"台风: {dn}", TXT), (10, 10))
+        text_surface.blit(rt(f_s, f"总点数: {len(ty.pts)}", TXT), (10, 40))
         fp, lp = ty.pts[0], ty.pts[-1]
-        ts.blit(rt(f_s, f"起点: {fp['la']:.1f}°N, {fp['lo']:.1f}°E", TXT), (10, 90))
-        ts.blit(rt(f_s, f"终点: {lp['la']:.1f}°N, {lp['lo']:.1f}°E", TXT), (10, 110))
+        text_surface.blit(rt(f_s, f"起点: {fp['la']:.1f}°N, {fp['lo']:.1f}°E", TXT), (10, 90))
+        text_surface.blit(rt(f_s, f"终点: {lp['la']:.1f}°N, {lp['lo']:.1f}°E", TXT), (10, 110))
         vw = [p['w'] for p in ty.pts if p['st'].upper() not in ('MD', 'SS', 'SD', 'EX', 'LO')]
         if vw:
             mw = max(vw)
             mc = self.sim.gsc(mw, "")
         else:
             mw, mc = 0, "N/A"
-        ts.blit(rt(f_s, f"最大强度: {mc} ({mw}kt)", TXT), (10, 140))
-        surface.blit(ts, (tx, ty2))
+        text_surface.blit(rt(f_s, f"最大强度: {mc} ({mw}kt)", TXT), (10, 140))
+        surface.blit(text_surface, (tx, ty2))

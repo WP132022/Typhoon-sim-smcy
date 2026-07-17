@@ -51,43 +51,38 @@ class AppConfig:
     level3_rotation_speed: float = 1.5
     volume: float = 0.6
     name_display_mode: int = 0
+    point_name_mode: bool = False
     hemisphere: str = HEMISPHERE_NORTH
     point_size: int = 100
     icon_size: int = 100
+    name_size: int = 100
     fix_icon_point_size: bool = False
     fade_typhoon: bool = True
     fade_path: bool = True
     smooth_path: bool = False
     smooth_path_segments: int = 10
+    path_mode: str = "markers"
     ace_interpolated: bool = False
     show_fps: bool = False
     monthly_summary: bool = True
 
+    show_ri_effect: bool = True
+    show_ace_bar: bool = True
+    show_ace_total: bool = True
+
     disable_dpi_scaling: bool = True
 
     icon_set: str = ICON_SET_DEFAULT
+    color_scheme: int = 1
+    show_summary: bool = True
+    summary_transparent: bool = True
     basin_filter_enabled: bool = True
 
     tn: Dict[str, str] = field(default_factory=dict)
 
-    _FIELDS: Tuple[str, ...] = (
-        "mlo", "Mlo", "mla", "Mla", "cmp",
-        "ac", "md", "sp", "mis", "mas",
-        "show_info_box_normal", "show_info_box_season",
-        "screen_width", "screen_height", "window_topmost",
-        "ace_display_mode",
-        "ace_geo_limit_enabled", "ace_limit_mode", "ace_limit_basin",
-        "ace_min_lon", "ace_max_lon", "ace_min_lat", "ace_max_lat",
-        "land_min_lon", "land_max_lon", "land_min_lat", "land_max_lat",
-        "main_rotation_speed", "level3_rotation_speed", "volume",
-        "name_display_mode", "hemisphere",
-        "point_size", "icon_size", "fix_icon_point_size",
-        "fade_typhoon", "fade_path",
-        "smooth_path", "smooth_path_segments",
-        "ace_interpolated", "show_fps",
-        "monthly_summary",
-        "disable_dpi_scaling", "icon_set", "basin_filter_enabled", "tn",
-    )
+    @classmethod
+    def _serialize_fields(cls) -> Tuple[str, ...]:
+        return tuple(f.name for f in fields(cls) if not f.name.startswith('_'))
 
     @classmethod
     def load(cls, path: str) -> "AppConfig":
@@ -104,7 +99,7 @@ class AppConfig:
 
     def save(self, path: str) -> None:
         with open(path, 'w', encoding='utf-8') as f:
-            json.dump({k: getattr(self, k) for k in self._FIELDS}, f, indent=2)
+            json.dump({k: getattr(self, k) for k in self._serialize_fields()}, f, indent=2)
 
     def update_from(self, other: "AppConfig") -> None:
         for fld in fields(self):

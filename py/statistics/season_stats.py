@@ -1,36 +1,10 @@
 ﻿# py/statistics/season_stats.py
 """洋区统计数据计算模块。"""
 from __future__ import annotations
-from datetime import datetime, timedelta
-from collections import defaultdict
-from typing import Dict, List, Optional, Tuple
-import math
+from datetime import datetime
+from typing import Dict, Optional
 
-
-# ── Haversine 公式 ──
-def _haversine(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
-    lat1, lon1, lat2, lon2 = map(math.radians, [lat1, lon1, lat2, lon2])
-    dlat = lat2 - lat1
-    dlon = lon2 - lon1
-    a = math.sin(dlat / 2) ** 2 + math.cos(lat1) * math.cos(lat2) * math.sin(dlon / 2) ** 2
-    return 6371.0 * 2.0 * math.asin(math.sqrt(a))
-
-
-# ── 强度类别 ──
-def _category(wind: int) -> str:
-    if wind < 34:
-        return "TD"
-    if wind < 64:
-        return "TS"
-    if wind < 83:
-        return "C1"
-    if wind < 96:
-        return "C2"
-    if wind < 113:
-        return "C3"
-    if wind < 137:
-        return "C4"
-    return "C5"
+from .chart_helpers import _haversine
 
 
 def _ace_eligible(pt: dict) -> bool:
@@ -146,7 +120,7 @@ def calculate_season_stats(
 
         # 风暴天统计（正式报，仅洋区内）
         for p in basin_pts:
-            if p.get('official') and _ace_eligible(p):
+            if p.get('official', True) and _ace_eligible(p):
                 dt = _parse_time(p['t'])
                 if dt:
                     storm_day_set.add(dt.strftime('%Y%m%d%H'))
@@ -179,9 +153,12 @@ def _compute_landfalls_from_data(sim, year, basin_code, stats):
         year_pts = [p for p in ty.pts if p.get('ace_year') == year]
         if not year_pts:
             continue
-        if basin_code and not any(sim.res_mgr.ocean_areas.get_by_code(basin_code).contains(p['la'], p['lo'])
-                                  for p in year_pts):
-            continue
+        if basin_code:
+            area = sim.res_mgr.ocean_areas.get_by_code(basin_code)
+            if area is None:
+                continue
+            if not any(area.contains(p['la'], p['lo']) for p in year_pts):
+                continue
         name = sim.get_display_name(ty)
         prev_on_land = None
         prev_p = None

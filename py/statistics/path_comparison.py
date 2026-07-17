@@ -2,12 +2,12 @@
 """多台风路径对比对话框。右侧选择栏，复选框管理台风可见性。含强度对比图。"""
 from __future__ import annotations
 import pygame
-from datetime import datetime
 from typing import List, Optional, Tuple, Set
 
-from ..constants import (f_s, f_m, rt, TXT, BUTTON_BORDER, BUTTON_BG,
+from ..constants import (f_s, f_m, rt, TXT, BUTTON_BORDER,
                           DIALOG_TITLE_BAR_HEIGHT)
 from ..dialog_base import DraggableDialog
+from .shared import COLORS
 
 
 # ── 侧栏常量 ──
@@ -17,14 +17,6 @@ CHECKBOX_SIZE = 14
 ROW_HEIGHT = 22
 SIDEBAR_PAD_TOP = 50
 SIDEBAR_PAD_BOTTOM = 20
-
-# ── 12 种可区分颜色 ──
-COLORS = [
-    (220, 60, 60), (60, 160, 60), (60, 60, 220),
-    (220, 160, 0), (160, 60, 160), (60, 180, 180),
-    (220, 100, 50), (100, 200, 100), (100, 100, 255),
-    (200, 200, 50), (200, 50, 200), (50, 200, 200),
-]
 
 
 class PathComparisonDialog(DraggableDialog):
@@ -51,9 +43,6 @@ class PathComparisonDialog(DraggableDialog):
         self._box_start = (0, 0)
         self._box_current = (0, 0)
 
-    # ═══════════════════════════════════════════════
-    #  激活 / 数据构建
-    # ═══════════════════════════════════════════════
     def activate(self):
         super().activate()
         self._build()
@@ -98,9 +87,6 @@ class PathComparisonDialog(DraggableDialog):
             return {a.code: i for i, a in enumerate(areas.areas)}
         return {}
 
-    # ═══════════════════════════════════════════════
-    #  渲染
-    # ═══════════════════════════════════════════════
     def _render(self):
         if self._cached_surf is not None:
             return
@@ -129,13 +115,13 @@ class PathComparisonDialog(DraggableDialog):
             Mlat = mlat + 2
 
         # ── Phase 2: 动态调整高度 ──
-        bx, by = 60, 50                     # 数据区左上角（相对 bg_rect）
-        bw = self.bg_rect.width - bx - SIDEBAR_WIDTH - SIDEBAR_GAP - 20
+        box_x, box_y = 60, 50                     # 数据区左上角（相对 bg_rect）
+        box_w = self.bg_rect.width - box_x - SIDEBAR_WIDTH - SIDEBAR_GAP - 20
         geo_ratio = (Mlon - mlon) / max(0.1, Mlat - mlat)
-        bh = int(bw / geo_ratio)
-        bh = max(100, min(2000, bh))
+        box_h = int(box_w / geo_ratio)
+        box_h = max(100, min(2000, box_h))
 
-        new_h = bh + by + 80
+        new_h = box_h + box_y + 80
         if new_h != self.bg_rect.height:
             self.bg_rect.height = new_h
             self.bg_rect.centery = self.sim.screen_height // 2
@@ -155,16 +141,16 @@ class PathComparisonDialog(DraggableDialog):
             iy1, iy2 = max(0, min(iy1, ih)), max(0, min(iy2, ih))
             if ix2 > ix1 and iy2 > iy1:
                 sub = orig.subsurface(pygame.Rect(ix1, iy1, ix2 - ix1, iy2 - iy1))
-                scaled = pygame.transform.smoothscale(sub, (bw, bh))
+                scaled = pygame.transform.smoothscale(sub, (box_w, box_h))
                 scaled.set_alpha(200)
-                surf.blit(scaled, (bx, by))
+                surf.blit(scaled, (box_x, box_y))
         except Exception:
             pass
 
         # ── Phase 3: 坐标映射与路径绘制 ──
         def geo_to_local(lon, lat):
-            x = bx + (lon - mlon) / (Mlon - mlon) * bw
-            y = by + (Mlat - lat) / (Mlat - mlat) * bh
+            x = box_x + (lon - mlon) / (Mlon - mlon) * box_w
+            y = box_y + (Mlat - lat) / (Mlat - mlat) * box_h
             return int(x), int(y)
 
         # 洋区边框
@@ -177,27 +163,25 @@ class PathComparisonDialog(DraggableDialog):
         for idx, ty in enumerate(self._tys):
             if idx not in self._selected:
                 continue
-            color = COLORS[idx % len(COLORS)]
             pts = [p for p in ty.pts
                    if p.get('ace_year', 0) == self._year
                    and engine.point_in_limit(p['la'], p['lo'])]
             if len(pts) < 1:
                 continue
             screen_pts = [geo_to_local(p['lo'], p['la']) for p in pts]
-            if len(screen_pts) > 1:
-                pygame.draw.lines(surf, color, False, screen_pts, 2)
-            for sx, sy in screen_pts:
-                pygame.draw.circle(surf, color, (sx, sy), 3)
+            # 渐变线段模式：每段用终点颜色
+            for i in range(1, len(screen_pts)):
+                x1, y1 = screen_pts[i - 1]
+                x2, y2 = screen_pts[i]
+                c = pts[i].get('color', COLORS[idx % len(COLORS)])
+                pygame.draw.line(surf, c, (x1, y1), (x2, y2), 3)
             if screen_pts:
                 name = self.sim.get_display_name(ty)
-                ns = rt(f_s, name, color)
+                ns = rt(f_s, name, pts[-1].get('color', COLORS[idx % len(COLORS)]))
                 surf.blit(ns, (screen_pts[0][0] + 5, screen_pts[0][1] - 8))
 
         self._cached_surf = surf
 
-    # ═══════════════════════════════════════════════
-    #  绘制
-    # ═══════════════════════════════════════════════
     def draw(self, surface: pygame.Surface):
         if not self.active:
             return
@@ -206,21 +190,21 @@ class PathComparisonDialog(DraggableDialog):
         if self._cached_surf:
             surface.blit(self._cached_surf, self.bg_rect.topleft)
 
-        bx, by = self.bg_rect.x, self.bg_rect.y
-        bw = self.bg_rect.width
-        bh = self.bg_rect.height
+        box_x, box_y = self.bg_rect.x, self.bg_rect.y
+        box_w = self.bg_rect.width
+        box_h = self.bg_rect.height
 
         # 标题
         title = rt(f_m, f"路径对比 — {self._year}", TXT)
-        surface.blit(title, (bx + 12, by + 8))
+        surface.blit(title, (box_x + 12, box_y + 8))
 
         # 关闭按钮
-        cb = pygame.Rect(bx + bw - 90, by + 8, 55, 25)
+        cb = pygame.Rect(box_x + box_w - 90, box_y + 8, 55, 25)
         self._close_btn_rect = cb
         self.draw_button(surface, cb, rt(f_s, "关闭", (255, 255, 255)))
 
         # ══ 右侧选择栏 ══
-        self._draw_sidebar(surface, bx, by, bw, bh)
+        self._draw_sidebar(surface, box_x, box_y, box_w, box_h)
 
         # ══ 框选矩形 ══
         if self._box_selecting:
@@ -233,12 +217,12 @@ class PathComparisonDialog(DraggableDialog):
             pygame.draw.rect(box_surf, (100, 180, 255), (0, 0, rw, rh), 1)
             surface.blit(box_surf, (rx, ry))
 
-    def _draw_sidebar(self, surface, bx, by, bw, bh):
+    def _draw_sidebar(self, surface, box_x, box_y, box_w, box_h):
         """绘制右侧选择栏"""
 
-        sx = bx + bw - SIDEBAR_WIDTH - 10
-        sy = by + 40
-        sh = bh - 80
+        sx = box_x + box_w - SIDEBAR_WIDTH - 10
+        sy = box_y + 40
+        sh = box_h - 80
         self._sidebar_rect = pygame.Rect(sx, sy, SIDEBAR_WIDTH, sh)
 
         # 侧栏背景
@@ -408,7 +392,7 @@ class PathComparisonDialog(DraggableDialog):
 
     def _apply_box_select(self):
         """根据框选矩形切换台风选中状态"""
-        if not self._sidebar_content_rect:
+        if self._sidebar_content_rect is None or self._sidebar_content_rect.width <= 0:
             return
         rx = min(self._box_start[0], self._box_current[0])
         ry = min(self._box_start[1], self._box_current[1])
@@ -426,9 +410,6 @@ class PathComparisonDialog(DraggableDialog):
                 if idx not in self._selected:
                     self._selected.add(idx)
                     changed = True
-            else:
-                # 框选之外的不变（保持原选中状态）
-                pass
 
         if changed:
             self._cached_surf = None

@@ -2,13 +2,17 @@
 """台风季月度总结弹窗：按月统计风暴、台风、MH、C5、ACE、最强风暴。"""
 import pygame
 
-from .constants import f_s, rt, TXT, INFO_BOX_BG, INFO_BOX_BORDER
+from .constants import f_m, f_l, rt, TXT, INFO_BOX_BG, INFO_BOX_BORDER
+from .constants.fonts import _load_font, SmartFont, FONT_FILE
 
-BOX_W = 240
-BOX_H = 160
+BOX_W = 420
+BOX_H = 285
 SLIDE_DURATION = 0.3
 VISIBLE_DURATION = 5.0
-BOX_Y = 115
+BOX_Y = 240
+
+_monthly_title = SmartFont(_load_font(FONT_FILE, 33, 33), _load_font(FONT_FILE, 33, 33))
+_monthly_body = SmartFont(_load_font(FONT_FILE, 27, 27), _load_font(FONT_FILE, 27, 27))
 
 _MONTH_NAMES = {
     1: "1月", 2: "2月", 3: "3月", 4: "4月", 5: "5月", 6: "6月",
@@ -29,6 +33,7 @@ class MonthlySummary:
         self._visible_timer = 0.0
         self._data = {}
         self._cached_surf = None
+        self._cached_text = None
 
     @property
     def active(self):
@@ -45,6 +50,7 @@ class MonthlySummary:
         self.state = self.SLIDING_IN
         self._anim_progress = 0.0
         self._cached_surf = None
+        self._cached_text = None
 
     def update(self, dt: float):
         if self.state == self.HIDDEN:
@@ -82,12 +88,14 @@ class MonthlySummary:
 
         if self._cached_surf is None:
             self._cached_surf = self._build_surface()
+            self._cached_text = self._build_text_surf()
 
-        bg = pygame.Surface((BOX_W, BOX_H), pygame.SRCALPHA)
-        alpha = int(255 * eased)
-        bg.set_alpha(alpha)
-        bg.blit(self._cached_surf, (0, 0))
-        surface.blit(bg, (x, BOX_Y))
+        surface.blit(self._cached_surf, (x, BOX_Y))
+
+        text_alpha = int(255 * eased)
+        text = self._cached_text.copy()
+        text.set_alpha(text_alpha)
+        surface.blit(text, (x, BOX_Y))
 
     def _compute(self, year: int, month: int):
         engine = self.sim.ace_engine
@@ -120,11 +128,11 @@ class MonthlySummary:
                     continue
                 in_month = True
                 w = p['w']
-                pace = p.get('pace', 0.0)
+                pace = p.get('pace', 0.0) or 0.0
                 total_ace += pace
                 if w > max_w:
                     max_w = w
-                if w >= 34:
+                if w >= 35:
                     ts_storms.add(tid)
                 if w >= 96:
                     mh_storms.add(tid)
@@ -149,14 +157,28 @@ class MonthlySummary:
         }
 
     def _build_surface(self):
-        d = self._data
+        dark = getattr(self.sim, 'dark_mode', True)
         surf = pygame.Surface((BOX_W, BOX_H), pygame.SRCALPHA)
-        pygame.draw.rect(surf, INFO_BOX_BG, (0, 0, BOX_W, BOX_H), 0, 10)
-        pygame.draw.rect(surf, INFO_BOX_BORDER, (0, 0, BOX_W, BOX_H), 2, 10)
+        if dark:
+            pygame.draw.rect(surf, (22, 28, 44, 220), (0, 0, BOX_W, BOX_H), 0, 10)
+            pygame.draw.rect(surf, (55, 85, 130), (0, 0, BOX_W, BOX_H), 2, 10)
+        else:
+            pygame.draw.rect(surf, INFO_BOX_BG, (0, 0, BOX_W, BOX_H), 0, 10)
+            pygame.draw.rect(surf, INFO_BOX_BORDER, (0, 0, BOX_W, BOX_H), 2, 10)
+        return surf
 
-        title = f"━━ {d['year']}年{self._month_str()} 总结 ━━"
-        title_surf = rt(f_s, title, TXT)
-        surf.blit(title_surf, ((BOX_W - title_surf.get_width()) // 2, 8))
+    def _build_text_surf(self):
+        d = self._data
+        dark = getattr(self.sim, 'dark_mode', True)
+        tc = (215, 225, 245) if dark else TXT
+        text_surf = pygame.Surface((BOX_W, BOX_H), pygame.SRCALPHA)
+
+        title = f"━━━ {d['year']}年{self._month_str()} 总结 ━━━"
+        title_surf = rt(_monthly_title, title, tc)
+        text_surf.blit(title_surf, ((BOX_W - title_surf.get_width()) // 2, 8))
+
+        sep_y = 51
+        pygame.draw.line(text_surf, (*tc, 80) if dark else (180, 190, 200), (20, sep_y), (BOX_W - 20, sep_y), 1)
 
         lines = [
             f"风暴: {d['storms']}",
@@ -168,10 +190,10 @@ class MonthlySummary:
         if d['strongest_name']:
             lines.append(f"最强: {d['strongest_name']} ({d['strongest_wind']}kt)")
 
-        y = 32
+        y = 66
         for line in lines:
-            ls = rt(f_s, line, TXT)
-            surf.blit(ls, (16, y))
-            y += 19
+            ls = rt(_monthly_body, line, tc)
+            text_surf.blit(ls, (36, y))
+            y += 36
 
-        return surf
+        return text_surf

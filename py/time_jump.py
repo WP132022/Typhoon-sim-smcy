@@ -36,7 +36,7 @@ class TimeJump(DraggableDialog):
         self.fields = []
         for i, (label, dv) in enumerate(zip(labels, defaults)):
             r = (dx + 120, dy + 80 + i * 45, 100, 24)
-            f = InputField(r, label=label, max_length=4, validator=str.isdigit)
+            f = InputField(r, max_length=4, validator=str.isdigit)
             f.set_text(dv)
             self.fields.append(f)
         self.fields[0].activate()
@@ -67,7 +67,7 @@ class TimeJump(DraggableDialog):
         surface.blit(hint, (self.dialog_rect.x + 50, self.dialog_rect.y + 310))
         # 标签
         for i, label in enumerate(['年份:', '月份:', '日期:', '小时:']):
-            lb = rt(f_s, label, label_color)
+            lb = rt(f_s, label, (255, 255, 255))
             surface.blit(lb, (self.dialog_rect.x + 30, self.dialog_rect.y + 80 + i * 45 + 2))
         if self.dark_mode:
             self.draw_dark_button(surface, pygame.Rect(self.dialog_rect.x + 100, self.dialog_rect.y + 340, 80, 30), "确认", accent=True)
@@ -90,10 +90,12 @@ class TimeJump(DraggableDialog):
         if e.type == pygame.MOUSEBUTTONDOWN and e.button == 1:
             x, y = e.pos
             if pygame.Rect(self.dialog_rect.x + 100, self.dialog_rect.y + 340, 80, 30).collidepoint(x, y):
-                self._jump()
-                return self.deactivate()
+                if self._jump():
+                    self.deactivate()
+                return True
             if pygame.Rect(self.dialog_rect.x + 220, self.dialog_rect.y + 340, 80, 30).collidepoint(x, y):
-                return self.deactivate()
+                self.deactivate()
+                return True
             for f in self.fields:
                 if f.rect.collidepoint(e.pos):
                     for g in self.fields:
@@ -103,10 +105,12 @@ class TimeJump(DraggableDialog):
 
         if e.type == pygame.KEYDOWN:
             if e.key == pygame.K_ESCAPE:
-                return self.deactivate()
+                self.deactivate()
+                return True
             if e.key == pygame.K_RETURN:
-                self._jump()
-                return self.deactivate()
+                if self._jump():
+                    self.deactivate()
+                return True
             if e.key in (pygame.K_TAB, pygame.K_KP_ENTER):
                 idx = next((i for i, f in enumerate(self.fields) if f.active), -1)
                 delta = -1 if pygame.key.get_mods() & pygame.KMOD_SHIFT else 1
@@ -125,13 +129,16 @@ class TimeJump(DraggableDialog):
         try:
             y, m, d, h = (int(f.get_text()) for f in self.fields)
         except ValueError:
-            return self.sim.show_error("请输入有效的数字")
+            self.sim.show_error("请输入有效的数字")
+            return False
         if not (1 <= m <= 12 and 1 <= d <= 31 and 0 <= h <= 23):
-            return self.sim.show_error("日期或时间超出范围")
+            self.sim.show_error("日期或时间超出范围")
+            return False
         try:
             target = datetime(y, m, d, h)
         except ValueError:
-            return self.sim.show_error("无效的日期")
+            self.sim.show_error("无效的日期")
+            return False
 
         if hasattr(self.sim, 'season_ctrl'):
             self.sim.season_ctrl.jump_to(target)
@@ -139,4 +146,5 @@ class TimeJump(DraggableDialog):
 
         chart = getattr(getattr(self.sim, 'dialog_mgr', None), 'ace_chart', None)
         if chart and chart.active:
-            chart._needs_update = True
+            chart.needs_update = True
+        return True

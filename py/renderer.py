@@ -5,7 +5,10 @@ from __future__ import annotations
 import pygame
 from typing import TYPE_CHECKING
 
-from .constants import BG, ERROR_BG, ERROR_BORDER, f_m, rt, TXT
+from .constants import (
+    BG, ERROR_BG, ERROR_BORDER, f_m, f_s, rt,
+    FPS_GREEN, FPS_YELLOW, FPS_RED, ERROR_TIMEOUT_MS,
+)
 
 if TYPE_CHECKING:
     from .ty_sim import TySim
@@ -26,29 +29,24 @@ class Renderer:
         if getattr(sim.cfg, 'show_fps', False):
             self._draw_fps(surface)
 
-        if sim.error_message and pygame.time.get_ticks() - sim.error_time < 2000:
+        if sim.error_message and pygame.time.get_ticks() - sim.error_time < ERROR_TIMEOUT_MS:
             self._draw_error(surface)
 
-    def draw_view_only(self, surface: pygame.Surface) -> None:
-        """绘制地图+台风+效果，不含控制面板和对话框。用于截图。"""
-        self._draw_scene(surface)
-
     def _draw_scene(self, surface: pygame.Surface) -> None:
-        from . import perf
         sim = self.sim
         surface.fill(BG)
         sim._draw_map(surface)
-        perf.tick("    map")
 
         if sim.md == sim.MODE_SEASON:
             sim.draw_season_clock(surface)
-            sim.draw_ace_display(surface)
             sim._ms.draw(surface)
             if sim.show_info_box_season:
                 sim.draw_season_info_boxes(surface)
 
+        if getattr(sim, 'show_ace_bar', True):
+            sim.draw_ace_display(surface)
+
         sim._draw_typhoons(surface)
-        perf.tick("    paths")
 
         ct = pygame.time.get_ticks()
 
@@ -61,11 +59,16 @@ class Renderer:
             for ty in sim.tys:
                 if ty.act and ty.ss and not ty.sf:
                     sim.draw_typhoon_info(surface, ty)
-        perf.tick("    icons")
+        elif sim.md == sim.MODE_EDIT:
+            ty = sim.edit_typhoon
+            if ty and not dialog_open and getattr(ty.v, 'icon_alpha', 255) > 0:
+                sim.draw_typhoon_info(surface, ty)
 
         for eff in sim.effects:
+            if hasattr(eff, '_map_height'):
+                eff._map_height = sim.map_height
+                eff._dark_mode = getattr(sim, 'dark_mode', True)
             eff.draw(surface, ct)
-        perf.tick("    effects")
 
     def _draw_error(self, surface: pygame.Surface) -> None:
         sim = self.sim
@@ -82,12 +85,11 @@ class Renderer:
     def _draw_fps(self, surface: pygame.Surface) -> None:
         fps = getattr(self.sim, '_fps', 60.0)
         if fps >= 60:
-            color = (0, 180, 0)
+            color = FPS_GREEN
         elif fps >= 30:
-            color = (220, 180, 0)
+            color = FPS_YELLOW
         else:
-            color = (220, 30, 30)
-        from .constants import f_s, rt  # noqa: F811
+            color = FPS_RED
         fps_text = rt(f_s, f"FPS: {fps:.0f}", color)
         x = self.sim.screen_width - fps_text.get_width() - 8
         surface.blit(fps_text, (x, 8))

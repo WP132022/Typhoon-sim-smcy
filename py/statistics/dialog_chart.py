@@ -6,32 +6,33 @@ import os
 from typing import List, Tuple, Optional, Dict
 
 from ..constants import (
-    f_s, f_m, f_l, rt, TXT, BUTTON_BORDER, LIST_BG,
+    f_s, f_m, f_l, rt, TXT, BUTTON_BORDER,
     HEMISPHERE_NORTH, HEMISPHERE_SOUTH,
-    ACE_CHART_DEFAULT_WIDTH, ACE_CHART_DEFAULT_HEIGHT,
-    ACE_CHART_PADDING_LEFT, ACE_CHART_PADDING_RIGHT, ACE_CHART_PADDING_TOP,
     DIALOG_TITLE_BAR_HEIGHT,
 )
+from ..constants.fonts import SmartFont, _load_font, FONT_FILE
 from ..input_field import InputField
 from ..dialog_base import DraggableDialog
 
 from .data_builder_chart import build_chart_data, ChartData
-from .draw_helpers_chart import draw_dashed_h, build_month_lines_surface
-from .curve_chart import draw_curve_chart
-from .daily_ace_chart import draw_daily_ace_chart
-from .active_periods_chart import draw_active_periods_chart
-from .activity_count_chart import draw_activity_count_chart
+from .chart_helpers import draw_dashed_h, ChartGridMixin, _offset_rect
+from .chart_presets import draw_curve_chart, draw_daily_ace_chart, draw_active_periods_chart, draw_activity_count_chart
 from .typhoon_ace_chart import draw_typhoon_ace_chart
 from .season_stats import calculate_season_stats
 
-WINDOW_WIDTH_SCALE = 1.2
+_font_ace_title = None
+
+_PICTURE_DIR = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), 'picture')
+
+def _get_ace_title_font():
+    global _font_ace_title
+    if _font_ace_title is None:
+        _font_ace_title = SmartFont(_load_font(FONT_FILE, 30, 30), _load_font(FONT_FILE, 30, 30))
+    return _font_ace_title
 
 
-def _offset_rect(r: pygame.Rect, dy: int) -> pygame.Rect:
-    return pygame.Rect(r.x, r.y + dy, r.w, r.h)
-
-
-class ACEChartDialog(DraggableDialog):
+class ACEChartDialog(ChartGridMixin, DraggableDialog):
     def __init__(self, sim):
         super().__init__(sim)
         self.close_text = rt(f_s, "关闭", (255, 255, 255))
@@ -45,17 +46,15 @@ class ACEChartDialog(DraggableDialog):
         self._no_data_text = rt(f_m, "无可用年份数据", TXT)
 
         self.cumulative_to_current = False
-        max_w = max(800, min(int(ACE_CHART_DEFAULT_WIDTH * WINDOW_WIDTH_SCALE), self.sim.screen_width - 20))
-        max_h = max(600, min(ACE_CHART_DEFAULT_HEIGHT, self.sim.screen_height - 80))
-        self.window_width = max_w
-        self.window_height = max_h
-        self._max_window_height = max_h
-        self.bg_rect = pygame.Rect(0, 0, self.window_width, self.window_height)
+        self.bg_rect = pygame.Rect(0, 0, 1, 1)
         self.title_bar_height = DIALOG_TITLE_BAR_HEIGHT
+
+        self._init_grid_attributes()
+        self.bg_rect = pygame.Rect(0, 0, self.window_width, self.window_height)
 
         # 数据
         self._chart_data = ChartData()
-        self._needs_update = True
+        self.needs_update = True
         self._layout_valid = False
         self._show_stats = False
         self._stats_data: Optional[Dict] = None
@@ -65,24 +64,6 @@ class ACEChartDialog(DraggableDialog):
         self._cached_title_hash: Optional[int] = None
         self._cached_mode_text: Optional[pygame.Surface] = None
         self._cached_mode_hash: Optional[int] = None
-
-        self.padding_left = ACE_CHART_PADDING_LEFT
-        self.padding_right = ACE_CHART_PADDING_RIGHT
-        self.padding_top = ACE_CHART_PADDING_TOP
-        self.graph_width = self.window_width - self.padding_left - self.padding_right
-
-        self.curve_rect = pygame.Rect(0, 0, 0, 0)
-        self.daily_bar_rect = pygame.Rect(0, 0, 0, 0)
-        self.chart2_rect = pygame.Rect(0, 0, 0, 0)
-        self.chart3_rect = pygame.Rect(0, 0, 0, 0)
-        self.bar_rect = pygame.Rect(0, 0, 0, 0)
-
-        self.curve_height = 250
-        self.daily_height = 180
-        self.chart2_height = 360
-        self.chart3_height = 120
-        self.typhoon_height = 250
-        self._typhoon_bar_width = 30
 
         self._available_years: List[int] = []
         self._selected_year_index = -1
@@ -102,21 +83,8 @@ class ACEChartDialog(DraggableDialog):
         self._bar_arrow_left: Optional[pygame.Rect] = None
         self._bar_arrow_right: Optional[pygame.Rect] = None
 
-        self._scroll_y: int = 0
-        self._content_height: int = 0
-
         self._jump_active = False
         self._jump_field: Optional[InputField] = None
-
-        self._month_lines_surface: Optional[pygame.Surface] = None
-        self._month_line_xs: List[float] = []
-        self._month_line_labels: List[str] = []
-        self._month_line_top = 0
-        self._month_line_bottom = 0
-        self._month_label_y = 0
-
-        self._month_label_surfs: Optional[List[pygame.Surface]] = None
-        self._month_label_surf_xs: Optional[List[float]] = None
 
         # 底部按钮区域
         self._stats_btn_rect = pygame.Rect(0, 0, 0, 0)
@@ -151,10 +119,11 @@ class ACEChartDialog(DraggableDialog):
         else:
             idx = -1
         self._selected_year_index = idx
-        self._needs_update = True
+        self.needs_update = True
 
         if idx >= 0:
             self._rebuild()
+            self.needs_update = False
             self._compute_layout()
             self._build_month_cache()
             self._layout_valid = True
@@ -172,22 +141,7 @@ class ACEChartDialog(DraggableDialog):
         self._cached_title_hash = None
         self._cached_mode_text = None
         self._cached_mode_hash = None
-        self._month_label_surfs = None
-        self._month_label_surf_xs = None
-
-    # ═══════════════════════════════════════════════
-    #  布局
-    # ═══════════════════════════════════════════════
-    def _center_in_map(self):
-        map_cx = self.sim.screen_width // 2
-        map_cy = self.sim.map_height // 2
-        self.bg_rect.x = max(0, map_cx - self.window_width // 2)
-        self.bg_rect.y = max(0, map_cy - self.window_height // 2)
-        if self.bg_rect.right > self.sim.screen_width:
-            self.bg_rect.x = self.sim.screen_width - self.window_width
-        if self.bg_rect.bottom > self.sim.screen_height:
-            self.bg_rect.y = self.sim.screen_height - self.window_height
-        self._layout_valid = False
+        self._invalidate_grid_caches()
 
     def _rebuild(self):
         if self._selected_year_index < 0:
@@ -205,76 +159,6 @@ class ACEChartDialog(DraggableDialog):
         self._invalidate_caches()
         self._layout_valid = False
 
-    def _compute_layout(self):
-        if self._layout_valid:
-            return
-
-        graph_width = self.window_width - self.padding_left - self.padding_right
-        chart_data = self._chart_data
-
-        n_ty = max(1, len(chart_data.typhoon_ace_list))
-        tbw = min(40, graph_width / n_ty * 0.7)
-        self._typhoon_bar_width = tbw
-
-        chart2_h = 480
-        chart3_h = max(40, int(2 * tbw))
-        curve_h, daily_h, typhoon_h = 250, 180, 250
-
-        top_area = self.padding_top + 40 + 30
-        bottom_area = 70
-        label_row = 18
-        gap = 10
-
-        needed = top_area + curve_h + daily_h + chart2_h + chart3_h + label_row + gap + typhoon_h + bottom_area
-        max_h = min(1440, self.sim.screen_height - 100)
-        if needed > max_h:
-            self.window_height = max_h
-            self._content_height = needed
-        else:
-            self.window_height = needed
-            self._content_height = needed
-            self._scroll_y = 0
-
-        self.curve_height = curve_h
-        self.daily_height = daily_h
-        self.chart2_height = chart2_h
-        self.chart3_height = chart3_h
-        self.typhoon_height = typhoon_h
-        self.graph_width = graph_width
-
-        bx = self.bg_rect.x + self.padding_left
-        top = self.bg_rect.y + self.padding_top + 32
-        self.curve_rect = pygame.Rect(bx, top, graph_width, curve_h)
-        self.daily_bar_rect = pygame.Rect(bx, self.curve_rect.bottom, graph_width, daily_h)
-        self.chart2_rect = pygame.Rect(bx, self.daily_bar_rect.bottom, graph_width, chart2_h)
-        self.chart3_rect = pygame.Rect(bx, self.chart2_rect.bottom, graph_width, chart3_h)
-        self._month_label_y = self.chart3_rect.bottom + 7
-        bt = self.chart3_rect.bottom + label_row + gap + 5
-        self.bar_rect = pygame.Rect(bx, bt, graph_width, typhoon_h)
-        self._month_line_top = self.curve_rect.top
-        self._month_line_bottom = self.chart3_rect.bottom + 5
-        total_h = self.bar_rect.bottom - self.bg_rect.y + 55
-        self._content_height = max(self._content_height, total_h)
-        max_h = min(1440, self.sim.screen_height - 100)
-        self.bg_rect.height = min(max_h, max(self.window_height, total_h))
-        self.window_height = self.bg_rect.height
-        max_scroll = max(0, self._content_height - self.window_height)
-        self._scroll_y = max(0, min(self._scroll_y, max_scroll))
-
-        self._layout_valid = True
-
-    def _build_month_cache(self):
-        cd = self._chart_data
-        sd, _, th = cd.year_range
-        w = self.graph_width
-        h = self._month_line_bottom - self._month_line_top
-        surf, xs, labels = build_month_lines_surface(w, h, sd, th, self.sim.hemisphere)
-        self._month_lines_surface = surf
-        self._month_line_xs = xs
-        self._month_line_labels = labels
-        self._month_label_surfs = [rt(f_s, lbl, TXT) for lbl in labels]
-        self._month_label_surf_xs = xs
-
     # ═══════════════════════════════════════════════
     #  绘制
     # ═══════════════════════════════════════════════
@@ -291,15 +175,15 @@ class ACEChartDialog(DraggableDialog):
             self.draw_button(surface, cb, self.close_text)
             return
 
-        if self._needs_update:
+        if self.needs_update:
             self._rebuild()
-            self._needs_update = False
+            self.needs_update = False
         self._compute_layout()
         self.draw_background(surface, self.bg_rect)
 
-        bx, by = self.bg_rect.x, self.bg_rect.y
-        bw = self.bg_rect.width
-        dy = -self._scroll_y
+        box_x, box_y = self.bg_rect.x, self.bg_rect.y
+        box_w = self.bg_rect.width
+        dialog_y = -self._scroll_y
 
         # 裁剪到可见窗口
         old_clip = surface.get_clip()
@@ -308,11 +192,11 @@ class ACEChartDialog(DraggableDialog):
         # 标题
         title_hash = self._title_hash()
         if self._cached_title_surf is None or self._cached_title_hash != title_hash:
-            self._cached_title_surf = rt(f_l, self._build_title(), TXT)
+            self._cached_title_surf = rt(_get_ace_title_font(), self._build_title(), TXT)
             self._cached_title_hash = title_hash
-        surface.blit(self._cached_title_surf, (bx + 12, by + 8))
+        surface.blit(self._cached_title_surf, (box_x + 12, box_y + 8))
 
-        self._draw_top_buttons(surface, bx, by, bw)
+        self._draw_top_buttons(surface, box_x, box_y, box_w)
         self._hover_info = None
         self._hover_pos = None
 
@@ -322,14 +206,14 @@ class ACEChartDialog(DraggableDialog):
         if self._month_lines_surface is None:
             self._build_month_cache()
         if self._month_lines_surface is not None:
-            surface.blit(self._month_lines_surface, (bx + self.padding_left, self._month_line_top + dy))
+            surface.blit(self._month_lines_surface, (box_x + self.padding_left, self._month_line_top + dialog_y))
 
         # 图表（所有 rect Y 偏移 dy）
-        hint = draw_curve_chart(surface, _offset_rect(self.curve_rect, dy),
+        hint = draw_curve_chart(surface, _offset_rect(self.curve_rect, dialog_y),
                                 cd.ace_curve_points,
                                 cd.year_range, cd.year_total_ace, draw_dashed_h)
         self._apply_hint(hint)
-        hint = draw_daily_ace_chart(surface, _offset_rect(self.daily_bar_rect, dy),
+        hint = draw_daily_ace_chart(surface, _offset_rect(self.daily_bar_rect, dialog_y),
                                     cd.daily_ace_list,
                                     cd.year_range, draw_dashed_h)
         self._apply_hint(hint)
@@ -337,12 +221,12 @@ class ACEChartDialog(DraggableDialog):
         areas = getattr(getattr(self.sim, 'res_mgr', None), 'ocean_areas', None)
         if areas and areas.areas:
             area_map = {a.code: a.name_cn for a in areas.areas}
-        hint, click_targets = draw_active_periods_chart(surface, _offset_rect(self.chart2_rect, dy),
+        hint, click_targets = draw_active_periods_chart(surface, _offset_rect(self.chart2_rect, dialog_y),
                                          cd.active_periods,
                                          cd.year_range, self._typhoon_bar_width, area_map)
         self._apply_hint(hint)
         self._active_period_click_targets = click_targets
-        hint = draw_activity_count_chart(surface, _offset_rect(self.chart3_rect, dy),
+        hint = draw_activity_count_chart(surface, _offset_rect(self.chart3_rect, dialog_y),
                                          cd.activity_count_list,
                                          cd.year_range, draw_dashed_h)
         self._apply_hint(hint)
@@ -350,15 +234,15 @@ class ACEChartDialog(DraggableDialog):
         # 月份标签
         if self._month_label_surfs and self._month_label_surf_xs:
             for x_px, ls in zip(self._month_label_surf_xs, self._month_label_surfs):
-                surface.blit(ls, (bx + self.padding_left + x_px - ls.get_width() // 2, self._month_label_y + dy))
+                surface.blit(ls, (box_x + self.padding_left + x_px - ls.get_width() // 2, self._month_label_y + dialog_y))
 
         hint, total_pages, multi = draw_typhoon_ace_chart(
-            surface, _offset_rect(self.bar_rect, dy), cd.typhoon_ace_list, self._bar_page
+            surface, _offset_rect(self.bar_rect, dialog_y), cd.typhoon_ace_list, self._bar_page
         )
         self._apply_hint(hint)
 
         if multi:
-            by2 = self.bar_rect.bottom + dy + 28
+            by2 = self.bar_rect.bottom + dialog_y + 28
             bl = pygame.Rect(self.bar_rect.x + 5, by2, 16, 16)
             br2 = pygame.Rect(self.bar_rect.right - 21, by2, 16, 16)
             pygame.draw.polygon(surface, TXT,
@@ -371,121 +255,19 @@ class ACEChartDialog(DraggableDialog):
             self._bar_arrow_left = None
             self._bar_arrow_right = None
 
-        # 洋区框 — 已移除，不再在地图坐标绘制独立矩形
-
-        # 统计面板 — 已改为独立对话框
-        # if self._show_stats and self._stats_data:
-        #     self._draw_stats_panel(surface, bx)
-
-        self._draw_bottom_buttons(surface, bx)
+        self._draw_bottom_buttons(surface, box_x)
         self._draw_hover(surface)
 
-        # 滚动条
-        if self._content_height > self.window_height:
-            bar_h = max(20, int(self.window_height * self.window_height / self._content_height))
-            bar_y = by + int(self._scroll_y * self.window_height / self._content_height)
-            pygame.draw.rect(surface, (160, 160, 160),
-                             pygame.Rect(bx + bw - 8, bar_y, 6, bar_h), border_radius=3)
+        # 滚动条（委托给 ChartGridMixin）
+        self._draw_scrollbar(surface, box_x, box_y, box_w)
 
         surface.set_clip(old_clip)
 
-    def _draw_basin_box(self, surface):
-        lm = getattr(self.sim, 'ace_limit_mode', 'none')
-        bc = getattr(self.sim, 'ace_limit_basin', '')
-        if lm != 'basin' or not bc:
-            return
-        area = self.sim.res_mgr.ocean_areas.get_by_code(bc)
-        if not area or not area.vertices:
-            return
-
-        # 计算边界 +5°
-        lons = [v[1] for v in area.vertices]
-        lats = [v[0] for v in area.vertices]
-        min_lon, max_lon = min(lons) - 5, max(lons) + 5
-        min_lat, max_lat = min(lats) - 5, max(lats) + 5
-
-        # 转换为屏幕坐标
-        top_left = self.sim.latlon_to_screen(max_lat, min_lon)
-        bottom_right = self.sim.latlon_to_screen(min_lat, max_lon)
-
-        # 绘制到地图上（不画在对话框内）
-        map_rect = pygame.Rect(
-            min(top_left[0], bottom_right[0]),
-            min(top_left[1], bottom_right[1]),
-            abs(bottom_right[0] - top_left[0]),
-            abs(bottom_right[1] - top_left[1])
-        )
-        self._basin_box_rect = map_rect
-        pygame.draw.rect(surface, (100, 180, 240), map_rect, 2)  # 浅蓝色实线
-
-    def _draw_stats_panel(self, surface, bx):
-        if not self._stats_data:
-            return
-        stats = self._stats_data
-        # 对齐图表左侧 padding_left
-        start_x = bx + self.padding_left
-        y_base = self.bar_rect.bottom + 15
-
-        # 竖列布局：3 列，每列 5 行（共15项自动补齐）
-        labels = [
-            ("总低压数", f"{stats['total_td']}", "达到TD及以上强度且性质达标"),
-            ("总风暴数", f"{stats['total_ts']}", "达到TS及以上强度且性质达标"),
-            ("总台风数", f"{stats['total_ty']}", "达到C1及以上强度且性质达标"),
-            ("总MH数", f"{stats['total_mh']}", "达到C3及以上强度且性质达标"),
-            ("总C5数", f"{stats['total_c5']}", "达到C5及以上强度且性质达标"),
-            ("总系统数", f"{stats['total_systems']}", "统计所有系统,任何性质与强度"),
-            ("风王", f"{stats['wind_king'][0]}: {stats['wind_king'][1]:.0f}kt" if stats['wind_king'] else "-", "强度最高TC"),
-            ("ACE王", f"{stats['ace_king'][0]}: {stats['ace_king'][1]:.2f}" if stats['ace_king'] else "-", "ACE最高TC"),
-            ("登陆王", f"{stats['landfall_king'][0]}: {stats['landfall_king'][1]:.0f}kt" if stats['landfall_king'] else "-", "登陆强度最高TC"),
-            ("寿命王", f"{stats['lifetime_king'][0]}: {stats['lifetime_king'][1]:.0f}h" if stats['lifetime_king'] else "-", "TS及以上活跃时间最长的TC"),
-            ("总ACE", f"{stats['total_ace']:.4f}", "该洋区ACE加总"),
-            ("总活跃时间", f"{stats['total_active_hours']:.1f}h", "TS及以上活跃时间加总"),
-            ("风暴天", f"{stats['storm_days']:.2f}d", "每个活跃正式报+0.25天"),
-            ("登陆次数", f"{stats['landfall_count']}", "总登陆次数"),
-            ("总路径长度", f"{stats['total_path_km']:.0f}km", "TS及以上路径长度加总"),
-        ]
-
-        num_cols = 3
-        rows_per_col = 5
-        col_width = 280
-
-        for i, (label, value, tooltip) in enumerate(labels):
-            col = i // rows_per_col
-            row = i % rows_per_col
-            x = start_x + col * col_width
-            y = y_base + row * 22
-
-            line = rt(f_s, f"{label}: {value}", TXT)
-            surface.blit(line, (x, y))
-
-            # 存储悬停区域
-            if not hasattr(self, '_stats_hover_rects'):
-                self._stats_hover_rects = []
-            if len(self._stats_hover_rects) <= i:
-                self._stats_hover_rects.append(None)
-            self._stats_hover_rects[i] = (pygame.Rect(x, y, line.get_width(), line.get_height()), tooltip)
-
-        # 悬停检测
-        mx, my = pygame.mouse.get_pos()
-        for rect, tip in self._stats_hover_rects:
-            if rect and rect.collidepoint(mx, my):
-                now = pygame.time.get_ticks()
-                if not hasattr(self, '_stats_hover_start'):
-                    self._stats_hover_start = now
-                    self._last_hover_rect = rect
-                elif self._last_hover_rect == rect and now - self._stats_hover_start > 2000:
-                    self._hover_info = tip
-                    self._hover_pos = (mx + 15, my - 25)
-                elif self._last_hover_rect != rect:
-                    self._stats_hover_start = now
-                    self._last_hover_rect = rect
-                break
-
-    def _draw_bottom_buttons(self, surface, bx):
+    def _draw_bottom_buttons(self, surface, box_x):
         y_bottom = self.bg_rect.y + self.bg_rect.height - 45
         btn_w, btn_h, gap = 90, 28, 8
         # 保存图片
-        sb = pygame.Rect(bx + 15, y_bottom, 100, btn_h)
+        sb = pygame.Rect(box_x + 15, y_bottom, 100, btn_h)
         self._save_btn_rect = sb
         self.draw_button(surface, sb, self.save_text)
         # 指定年份
@@ -518,16 +300,16 @@ class ACEChartDialog(DraggableDialog):
         if self._hover_info and self._hover_pos:
             tip = rt(f_s, self._hover_info, TXT)
             tw, th = tip.get_width() + 8, tip.get_height() + 8
-            tx, ty = self._hover_pos
-            if ty - th < 0:
-                ty = self._hover_pos[1] + 15
-            if tx + tw > self.sim.screen_width:
-                tx = self.sim.screen_width - tw - 5
+            text_x, text_y = self._hover_pos
+            if text_y - th < 0:
+                text_y = self._hover_pos[1] + 15
+            if text_x + tw > self.sim.screen_width:
+                text_x = self.sim.screen_width - tw - 5
             tb = pygame.Surface((tw, th), pygame.SRCALPHA)
             tb.fill((255, 255, 255, 200))
             pygame.draw.rect(tb, BUTTON_BORDER, (0, 0, tw, th), 1)
             tb.blit(tip, (4, 4))
-            surface.blit(tb, (tx, ty - th))
+            surface.blit(tb, (text_x, text_y - th))
 
     # ═══════════════════════════════════════════════
     #  事件
@@ -574,7 +356,6 @@ class ACEChartDialog(DraggableDialog):
             return True
         # 路径对比
         if self._path_cmp_btn_rect.collidepoint(x, y):
-            from .path_comparison import PathComparisonDialog
             dlg = self.sim.dialog_mgr.path_comparison
             year = self._available_years[self._selected_year_index]
             self.sim.current_ace_year = year
@@ -582,7 +363,6 @@ class ACEChartDialog(DraggableDialog):
             return True
         # 热力图
         if self._heatmap_btn_rect.collidepoint(x, y):
-            from .heatmap import PathHeatmapDialog
             dlg = self.sim.dialog_mgr.heatmap
             year = self._available_years[self._selected_year_index]
             self.sim.current_ace_year = year
@@ -590,7 +370,6 @@ class ACEChartDialog(DraggableDialog):
             return True
         # 路径长度
         if self._path_len_btn_rect.collidepoint(x, y):
-            from .path_length_viewer import PathLengthViewer
             dlg = self.sim.dialog_mgr.path_length_viewer
             year = self._available_years[self._selected_year_index]
             self.sim.current_ace_year = year
@@ -600,7 +379,7 @@ class ACEChartDialog(DraggableDialog):
         if self._mode_btn_rect.collidepoint(x, y):
             self.cumulative_to_current = not self.cumulative_to_current
             self._invalidate_caches()
-            self._needs_update = True
+            self.needs_update = True
             return True
         # 保存图片
         if self._save_btn_rect.collidepoint(x, y):
@@ -615,13 +394,13 @@ class ACEChartDialog(DraggableDialog):
             if self._selected_year_index > 0:
                 self._selected_year_index -= 1
                 self._invalidate_caches()
-                self._needs_update = True
+                self.needs_update = True
             return True
         if self._arrow_right and self._arrow_right.collidepoint(x, y):
             if self._selected_year_index < len(self._available_years) - 1:
                 self._selected_year_index += 1
                 self._invalidate_caches()
-                self._needs_update = True
+                self.needs_update = True
             return True
         # 柱状图翻页
         if self._bar_arrow_left and self._bar_arrow_left.collidepoint(x, y):
@@ -666,26 +445,26 @@ class ACEChartDialog(DraggableDialog):
                 if y in self._available_years:
                     self._selected_year_index = self._available_years.index(y)
                     self._invalidate_caches()
-                    self._needs_update = True
+                    self.needs_update = True
             except ValueError:
                 pass
         self._jump_active = False
         self._jump_field = None
 
     def _save_chart_image(self):
-        out = "./picture"
+        out = _PICTURE_DIR
         os.makedirs(out, exist_ok=True)
         yv = self._available_years[self._selected_year_index]
         yd = self._year_display(yv).replace(' ', '_')
         lm = getattr(self.sim, 'ace_limit_mode', 'none')
         bc = getattr(self.sim, 'ace_limit_basin', '')
         if lm in ('none', '') and not bc:
-            fn = f"{yd}_GLOBAL_ACE"
+            filename = f"{yd}_GLOBAL_ACE"
         elif lm == 'basin' and bc:
-            a = self.sim.res_mgr.ocean_areas.get_by_code(bc)
-            fn = f"{yd}_{a.name_full if a else bc}_ACE"
+            a = self._get_basin_area(bc)
+            filename = f"{yd}_{a.name_full if a else bc}_ACE"
         else:
-            fn = f"{yd}_ACE"
+            filename = f"{yd}_ACE"
 
         ox, oy = self.bg_rect.x, self.bg_rect.y
         self.bg_rect.x = 0
@@ -698,15 +477,22 @@ class ACEChartDialog(DraggableDialog):
         self._layout_valid = False
         self._compute_layout()
 
-        fp = os.path.join(out, f"{fn}.png")
+        filepath = os.path.join(out, f"{filename}.png")
         try:
-            pygame.image.save(tmp, fp)
-            self.sim.show_error(f"图表已保存为 {fp}")
+            pygame.image.save(tmp, filepath)
+            self.sim.show_error(f"图表已保存为 {filepath}")
         except Exception as e:
             self.sim.show_error(f"保存失败: {e}")
 
+    def _get_basin_area(self, code):
+        res_mgr = getattr(self.sim, 'res_mgr', None)
+        areas = getattr(res_mgr, 'ocean_areas', None)
+        return areas.get_by_code(code) if areas else None
+
     # ── 标题 ──
     def _build_title(self) -> str:
+        if self._selected_year_index < 0 or not self._available_years:
+            return "No Data"
         yv = self._available_years[self._selected_year_index]
         yd = self._year_display(yv)
         tace = self.sim.yad.get(yv, 0.0)
@@ -715,12 +501,13 @@ class ACEChartDialog(DraggableDialog):
         if lm in ('none', '') and not bc:
             return f"{yd} GLOBAL ACE: {tace:.4f}"
         if lm == 'basin' and bc:
-            a = self.sim.res_mgr.ocean_areas.get_by_code(bc)
+            a = self._get_basin_area(bc)
             bd = a.name_full if a else bc
             avg = a.avg_ace if a else 0.0
         else:
             bd = ""
-            avg = getattr(self.sim.res_mgr.ocean_areas, 'total_avg_ace', 0)
+            avg = getattr(getattr(getattr(self.sim, 'res_mgr', None), 'ocean_areas', None),
+                          'total_avg_ace', 0) or 0
         anom = tace - avg
         sign = '+' if anom >= 0 else ''
         if bd:
@@ -748,14 +535,14 @@ class ACEChartDialog(DraggableDialog):
             sim.season_ctrl.jump_to(dt)
             sim._sync_season_state()
         sim._view_dirty = True
-        self._needs_update = True
+        self.needs_update = True
 
-    def _draw_top_buttons(self, surface, bx, by, bw):
-        BAR_Y = by + 6
+    def _draw_top_buttons(self, surface, box_x, box_y, box_w):
+        BAR_Y = box_y + 6
         BAR_H = 26
         GAP = 8
         a_sz = 16
-        cbtn = pygame.Rect(bx + bw - 55 - 10, BAR_Y, 55, BAR_H)
+        cbtn = pygame.Rect(box_x + box_w - 55 - 10, BAR_Y, 55, BAR_H)
         self.draw_button(surface, cbtn, self.close_text)
         self._close_btn_rect = cbtn
         acy = BAR_Y + BAR_H // 2

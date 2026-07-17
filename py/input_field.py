@@ -2,8 +2,11 @@
 from __future__ import annotations
 
 import pygame
+import logging
 from .constants import f_s, TXT, BUTTON_BORDER
 from typing import Optional, Callable, Tuple, Union
+
+logger = logging.getLogger(__name__)
 
 class InputField:
     def __init__(self,
@@ -38,16 +41,18 @@ class InputField:
                 pygame.scrap.init()
                 self.scrap_initialized = True
             except Exception:
-                pass
+                logger.debug("剪贴板初始化失败", exc_info=True)
 
     def _get_index_at_pos(self, x: int) -> int:
         rel_x = x - self.rect.x - 5
         if rel_x <= 0:
             return 0
-        for i in range(1, len(self.text) + 1):
-            w = self.font.size(self.text[:i])[0]
-            if rel_x < w:
+        acc = 0
+        for i, ch in enumerate(self.text):
+            w = self.font.size(ch)[0]
+            if rel_x < acc + w // 2:
                 return i
+            acc += w
         return len(self.text)
 
     def _delete_selection(self):
@@ -68,7 +73,7 @@ class InputField:
                 try:
                     pygame.scrap.put(pygame.SCRAP_TEXT, selected.encode('utf-8'))
                 except Exception:
-                    pass
+                    logger.debug("复制到剪贴板失败", exc_info=True)
 
     def _paste_from_clipboard(self):
         self._init_scrap()
@@ -84,7 +89,7 @@ class InputField:
                     self.text = self.text[:self.cursor_pos] + insert_text + self.text[self.cursor_pos:]
                     self.cursor_pos += len(insert_text)
             except Exception:
-                pass
+                logger.debug("从剪贴板粘贴失败", exc_info=True)
 
     def _handle_bs_accel(self) -> bool:
         """持续退格加速：返回 True 表示执行了一次删除"""

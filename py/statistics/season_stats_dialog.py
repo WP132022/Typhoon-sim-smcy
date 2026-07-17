@@ -43,8 +43,8 @@ class SeasonStatsDialog(DraggableDialog):
             return
         self.draw_background(surface, self.bg_rect)
 
-        bx, by = self.bg_rect.x, self.bg_rect.y
-        bw = self.bg_rect.width
+        box_x, box_y = self.bg_rect.x, self.bg_rect.y
+        box_w = self.bg_rect.width
 
         # 标题
         lm = getattr(self.sim, 'ace_limit_mode', 'none')
@@ -56,17 +56,17 @@ class SeasonStatsDialog(DraggableDialog):
         else:
             title_str = f"统计数据 — {self._year} 全球"
         title = rt(f_m, title_str, TXT)
-        surface.blit(title, (bx + 12, by + 8))
+        surface.blit(title, (box_x + 12, box_y + 8))
 
         # 关闭按钮
-        cb = pygame.Rect(bx + bw - 90, by + 8, 55, 25)
+        cb = pygame.Rect(box_x + box_w - 90, box_y + 8, 55, 25)
         self._close_btn_rect = cb
         self.draw_button(surface, cb, rt(f_s, "关闭", (255, 255, 255)))
 
         if not self._stats_data:
             no_data = rt(f_m, "无可用统计数据", TXT)
-            surface.blit(no_data, (bx + bw // 2 - no_data.get_width() // 2,
-                                   by + 100))
+            surface.blit(no_data, (box_x + box_w // 2 - no_data.get_width() // 2,
+                                   box_y + 100))
             return
 
         stats = self._stats_data
@@ -79,7 +79,7 @@ class SeasonStatsDialog(DraggableDialog):
             ("总C5数", f"{stats['total_c5']}", "达到C5及以上强度且性质达标"),
             ("总系统数", f"{stats['total_systems']}", "统计所有系统,任何性质与强度"),
             ("风王", f"{stats['wind_king'][0]}: {stats['wind_king'][1]:.0f}kt" if stats['wind_king'] else "-", "强度最高TC"),
-            ("ACE王", f"{stats['ace_king'][0]}: {stats['ace_king'][1]:.2f}" if stats['ace_king'] else "-", "ACE最高TC"),
+            ("ACE王", f"{stats['ace_king'][0]}: {stats['ace_king'][1]:.4f}" if stats['ace_king'] else "-", "ACE最高TC"),
             ("登陆王", f"{stats['landfall_king'][0]}: {stats['landfall_king'][1]:.0f}kt" if stats['landfall_king'] else "-", "登陆强度最高TC"),
             ("寿命王", f"{stats['lifetime_king'][0]}: {stats['lifetime_king'][1]:.0f}h" if stats['lifetime_king'] else "-", "TS及以上活跃时间最长的TC"),
             ("总ACE", f"{stats['total_ace']:.4f}", "该洋区ACE加总"),
@@ -92,8 +92,8 @@ class SeasonStatsDialog(DraggableDialog):
         num_cols = 3
         rows_per_col = 5
         col_width = 290
-        start_x = bx + 20
-        y_base = by + 55
+        start_x = box_x + 20
+        y_base = box_y + 55
 
         self._stats_hover_rects = []
         for i, (label, value, tooltip) in enumerate(labels):
@@ -109,16 +109,16 @@ class SeasonStatsDialog(DraggableDialog):
             self._stats_hover_rects.append((rect, tooltip))
 
         # 悬停检测
-        mx, my = pygame.mouse.get_pos()
+        mouse_x, mouse_y = pygame.mouse.get_pos()
         for rect, tip in self._stats_hover_rects:
-            if rect and rect.collidepoint(mx, my):
+            if rect and rect.collidepoint(mouse_x, mouse_y):
                 now = pygame.time.get_ticks()
                 if self._last_hover_rect != rect:
                     self._stats_hover_start = now
                     self._last_hover_rect = rect
                 elif now - self._stats_hover_start > 2000:
                     self._hover_info = tip
-                    self._hover_pos = (mx + 15, my - 25)
+                    self._hover_pos = (mouse_x + 15, mouse_y - 25)
                 break
         else:
             self._last_hover_rect = None
@@ -127,16 +127,16 @@ class SeasonStatsDialog(DraggableDialog):
         if self._hover_info and self._hover_pos:
             tip = rt(f_s, self._hover_info, TXT)
             tw, th = tip.get_width() + 8, tip.get_height() + 8
-            tx, ty = self._hover_pos
-            if ty - th < 0:
-                ty = self._hover_pos[1] + 15
-            if tx + tw > self.sim.screen_width:
-                tx = self.sim.screen_width - tw - 5
+            text_x, text_y = self._hover_pos
+            if text_y - th < 0:
+                text_y = self._hover_pos[1] + 15
+            if text_x + tw > self.sim.screen_width:
+                text_x = self.sim.screen_width - tw - 5
             tb = pygame.Surface((tw, th), pygame.SRCALPHA)
             tb.fill((255, 255, 255, 200))
             pygame.draw.rect(tb, BUTTON_BORDER, (0, 0, tw, th), 1)
             tb.blit(tip, (4, 4))
-            surface.blit(tb, (tx, ty - th))
+            surface.blit(tb, (text_x, text_y - th))
 
     def handle_event(self, e: pygame.event.Event) -> bool:
         if not self.active:

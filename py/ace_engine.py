@@ -8,6 +8,8 @@ from collections import Counter
 
 from .constants import HEMISPHERE_NORTH
 
+_TIMELINE_STEP_HOURS = 6
+
 if TYPE_CHECKING:
     from .ty_sim import TySim
     from .typhoon import Typhoon
@@ -260,7 +262,7 @@ class ACEEngine:
                 running += events[i][1]
                 i += 1
             timeline.append((cur, running))
-            cur += timedelta(hours=6)
+            cur += timedelta(hours=_TIMELINE_STEP_HOURS)
         return timeline
 
     def refresh_all(self) -> None:

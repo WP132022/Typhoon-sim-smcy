@@ -3,14 +3,15 @@
 from __future__ import annotations
 import pygame
 from datetime import datetime, timedelta
-from typing import List, Tuple, Optional, Dict
+from typing import List, Tuple, Optional
 
 from ..constants import (
     f_s, f_m, f_l, rt, TXT, BUTTON_BORDER, BUTTON_BG, DIALOG_TITLE_BAR_HEIGHT,
-    DB, TD, TS, C1, C2, C3, C4, C5_L, C5_M, C5_D, C2_MINUS, C3_MINUS, C4_ST, WV,
+    DB, TD, TS, C1, C2, C3, C4, C5_L, C5_M, C5_D, C2_MINUS, C3_MINUS, C4_ST,
 )
 from ..dialog_base import DraggableDialog
-from .draw_helpers_chart import DASH_COLOR, draw_dashed_h, draw_dashed_v
+from .chart_helpers import DASH_COLOR, draw_dashed_h, draw_dashed_v
+from .shared import _THRESHOLDS
 
 # ── 固定深蓝色（模式 2） ──
 DARK_BLUE = (20, 60, 140)
@@ -18,22 +19,6 @@ DARK_BLUE = (20, 60, 140)
 # ── ACE 曲线颜色 ──
 ACE_CURVE_COLOR = (220, 130, 30)      # 橙金色
 ACE_CURVE_LINE_W = 2
-
-# ── 强度阈值 + 颜色映射 ──
-_THRESHOLDS: List[Tuple[int, Tuple[int, int, int]]] = [
-    (29,  TD),
-    (34,  TS),
-    (64,  C1),
-    (83,  C2_MINUS),
-    (86,  C2),
-    (96,  C3_MINUS),
-    (105, C3),
-    (113, C4),
-    (130, C4_ST),
-    (137, C5_L),
-    (155, C5_L),
-    (170, C5_D),
-]
 
 # 填充区域：(y_lower, y_upper, color)
 _FILL_BANDS: List[Tuple[float, float, Tuple[int, int, int]]] = [
@@ -86,10 +71,6 @@ class IntensityChartDialog(DraggableDialog):
         self._margin_t = 50
         self._margin_b = 95
 
-    # ═══════════════════════════════════════════════
-    #  激活 / 关闭
-    # ═══════════════════════════════════════════════
-
     def activate(self):
         super().activate()
         self.dragging = False
@@ -132,7 +113,7 @@ class IntensityChartDialog(DraggableDialog):
     def _build(self):
         ty = self._typhoon
         pts = ty.pts
-        n = len(pts)
+        count = len(pts)
 
         # 保存旧位置，_build 可能在事件处理中被调用来重建缓存，
         # 此时 bg_rect 应保持用户拖拽后的位置不变
@@ -148,7 +129,7 @@ class IntensityChartDialog(DraggableDialog):
         self._scroll_y = max(0, min(self._scroll_y, max_scroll))
 
         ch_w = w - self._margin_l - self._margin_r
-        ch_h = ch - self._margin_t - self._margin_b
+        ch_h = self._content_h - self._margin_t - self._margin_b
         chart_left = self._margin_l
         chart_top = self._margin_t
 
@@ -252,7 +233,7 @@ class IntensityChartDialog(DraggableDialog):
                 ace_step = 20.0
             ace_val = 0.0
             while ace_val <= ace_max + ace_step * 0.01:
-                rel = ace_val / ace_max if ace_max > 0 else 0
+                rel = ace_val / ace_max
                 y_px = chart_top + ch_h - int(rel * ch_h)
                 fmt = f"{ace_val:.1f}" if ace_step < 1.0 else f"{ace_val:.0f}"
                 ace_lbl = rt(f_s, fmt, ACE_CURVE_COLOR)
@@ -347,13 +328,13 @@ class IntensityChartDialog(DraggableDialog):
         for i, (x_px, y_px) in enumerate(point_px):
             color = self._point_color(pts[i]['w'], pts[i]['st'])
             pygame.draw.circle(surf, color, (x_px, y_px), 5)
-            r = pygame.Rect(x_px - 6, y_px - 6, 12, 12)
+            rect = pygame.Rect(x_px - 6, y_px - 6, 12, 12)
             info = (
                 f"{pts_dt[i].strftime('%m/%d %HZ')}  "
                 f"{pts[i]['w']}kt  {pts[i]['st']}  {pts[i]['p']}hPa"
-                f"  ACE={pts[i].get('ace', 0):.2f}"
+                f"  ACE={pts[i].get('ace', 0.0):.4f}"
             )
-            self._cached_rects.append((r, info))
+            self._cached_rects.append((rect, info))
 
         # ── ACE 累计曲线 ──
         self._cached_ace_rects.clear()
@@ -373,9 +354,9 @@ class IntensityChartDialog(DraggableDialog):
             # ACE 点
             for i, (x_px, y_px) in enumerate(ace_points):
                 pygame.draw.circle(surf, ACE_CURVE_COLOR, (x_px, y_px), 4)
-                r = pygame.Rect(x_px - 5, y_px - 5, 10, 10)
+                rect = pygame.Rect(x_px - 5, y_px - 5, 10, 10)
                 ace_info = f"累计 ACE: {ace_cum_list[i]:.4f}  ({pts_dt[i].strftime('%m/%d %HZ')})"
-                self._cached_ace_rects.append((r, ace_info))
+                self._cached_ace_rects.append((rect, ace_info))
 
         # ── 图例 ──
         legend_y = chart_top + ch_h + 45
@@ -404,52 +385,52 @@ class IntensityChartDialog(DraggableDialog):
         if self._cached_chart is None:
             self._build()
 
-        bx, by = self.bg_rect.x, self.bg_rect.y
-        bw, bh = self.bg_rect.width, self.bg_rect.height
+        box_x, box_y = self.bg_rect.x, self.bg_rect.y
+        box_w, box_h = self.bg_rect.width, self.bg_rect.height
         # 裁剪并滚动
-        src_rect = pygame.Rect(0, self._scroll_y, bw, bh)
-        surface.blit(self._cached_chart, (bx, by), area=src_rect)
+        src_rect = pygame.Rect(0, self._scroll_y, box_w, box_h)
+        surface.blit(self._cached_chart, (box_x, box_y), area=src_rect)
 
         # 滚动条
-        if self._content_h > bh:
-            bar_h = max(20, int(bh * bh / self._content_h))
-            bar_y = by + int(self._scroll_y * bh / self._content_h)
+        if self._content_h > box_h:
+            bar_h = max(20, int(box_h * box_h / self._content_h))
+            bar_y = box_y + int(self._scroll_y * box_h / self._content_h)
             pygame.draw.rect(surface, (160, 160, 160),
-                             pygame.Rect(bx + bw - 8, bar_y, 6, bar_h), border_radius=3)
+                             pygame.Rect(box_x + box_w - 8, bar_y, 6, bar_h), border_radius=3)
 
         # ── 悬停信息 ──
-        mx, my = pygame.mouse.get_pos()
-        hover_rect = pygame.Rect(bx, by, bw, bh)
-        if not hover_rect.collidepoint(mx, my):
+        mouse_x, mouse_y = pygame.mouse.get_pos()
+        hover_rect = pygame.Rect(box_x, box_y, box_w, box_h)
+        if not hover_rect.collidepoint(mouse_x, mouse_y):
             return
-        offset_x, offset_y = bx, by - self._scroll_y
+        offset_x, offset_y = box_x, box_y - self._scroll_y
 
         # 优先 ACE 曲线悬停（点更小，更容易被强度点覆盖）
-        for r_local, info in self._cached_ace_rects:
-            r_global = r_local.move(offset_x, offset_y)
-            if r_global.collidepoint(mx, my):
-                self._draw_hover_tip(surface, info, mx, my)
+        for rect_local, info in self._cached_ace_rects:
+            r_global = rect_local.move(offset_x, offset_y)
+            if r_global.collidepoint(mouse_x, mouse_y):
+                self._draw_hover_tip(surface, info, mouse_x, mouse_y)
                 return
 
-        for r_local, info in self._cached_rects:
-            r_global = r_local.move(offset_x, offset_y)
-            if r_global.collidepoint(mx, my):
-                self._draw_hover_tip(surface, info, mx, my)
+        for rect_local, info in self._cached_rects:
+            r_global = rect_local.move(offset_x, offset_y)
+            if r_global.collidepoint(mouse_x, mouse_y):
+                self._draw_hover_tip(surface, info, mouse_x, mouse_y)
                 break
 
-    def _draw_hover_tip(self, surface, info, mx, my):
+    def _draw_hover_tip(self, surface, info, mouse_x, mouse_y):
         tip = rt(f_s, info, TXT)
         tw, th = tip.get_width() + 10, tip.get_height() + 8
-        tx, ty = mx + 15, my - 25
-        if ty < 0:
-            ty = my + 15
-        if tx + tw > self.sim.screen_width:
-            tx = self.sim.screen_width - tw - 5
+        text_x, text_y = mouse_x + 15, mouse_y - 25
+        if text_y < 0:
+            text_y = mouse_y + 15
+        if text_x + tw > self.sim.screen_width:
+            text_x = self.sim.screen_width - tw - 5
         tb = pygame.Surface((tw, th), pygame.SRCALPHA)
         tb.fill((255, 255, 255, 210))
         pygame.draw.rect(tb, BUTTON_BORDER, (0, 0, tw, th), 1)
         tb.blit(tip, (5, 4))
-        surface.blit(tb, (tx, ty))
+        surface.blit(tb, (text_x, text_y))
 
     # ═══════════════════════════════════════════════
     #  事件

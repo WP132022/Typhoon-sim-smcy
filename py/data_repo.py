@@ -17,6 +17,10 @@ from .typhoon import Typhoon, TrackPoint
 from .utils import infer_strength_category, darken_color as _darken_color
 from .constants import DB, EX, TD, TS, STS, C1, C2, C3, C4, C5_L, C5_M, C5_D, MD_COLOR, C2_MINUS, C3_MINUS, C4_ST, WV
 
+_C5_SUB_THRESHOLD_MID = 155
+_C5_SUB_THRESHOLD_HIGH = 170
+_C5_INTERP_RANGE = _C5_SUB_THRESHOLD_HIGH - _C5_SUB_THRESHOLD_MID
+
 if TYPE_CHECKING:
     from .resource_manager import ResourceManager, OceanArea
     from .config import AppConfig
@@ -100,9 +104,9 @@ class DataRepository:
             os.makedirs(TYPHOON_DIR)
             return
         for ext in ("*.txt", "*.dat"):
-            for fp in glob.glob(os.path.join(TYPHOON_DIR, ext)):
-                if os.path.isfile(fp):
-                    self.parse_typhoon_file(fp)
+            for filepath in glob.glob(os.path.join(TYPHOON_DIR, '**', ext), recursive=True):
+                if os.path.isfile(filepath):
+                    self.parse_typhoon_file(filepath)
         self._all_tys_backup = list(self.tys)
         if (getattr(self._sim, 'basin_filter_enabled', True) and
                 self.cfg.ace_limit_mode == "basin" and self.cfg.ace_limit_basin):
@@ -114,36 +118,41 @@ class DataRepository:
         self._refresh_ace()
         self._fill_point_categories()
 
-    def parse_typhoon_file(self, fp: str, add_to_list: bool = True) -> Optional[Typhoon]:
+    def parse_typhoon_file(self, filepath: str, add_to_list: bool = True) -> Optional[Typhoon]:
         encodings = ['utf-8', 'gbk', 'latin-1', 'cp1252']
         lines = None
         for enc in encodings:
             try:
-                with open(fp, 'r', encoding=enc) as f:
+                with open(filepath, 'r', encoding=enc) as f:
                     lines = f.readlines()
                 break
             except UnicodeDecodeError:
                 continue
+            except (IOError, OSError) as e:
+                logger.error(f"无法读取文件 {filepath}: {e}")
+                if self._sim:
+                    self._sim.show_error(f"无法读取文件 {os.path.basename(filepath)}")
+                return None
         if lines is None:
             try:
-                with open(fp, 'r', encoding='utf-8', errors='ignore') as f:
+                with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
                     lines = f.readlines()
             except (IOError, OSError) as e:
-                logger.error(f"无法读取文件 {fp}: {e}")
+                logger.error(f"无法读取文件 {filepath}: {e}")
                 if self._sim:
-                    self._sim.show_error(f"无法读取文件 {os.path.basename(fp)}")
+                    self._sim.show_error(f"无法读取文件 {os.path.basename(filepath)}")
                 return None
 
-        fmt = self.detect_format(fp)
-        fn = os.path.basename(fp)
-        m = re.search(r'(\d+)', fn)
+        fmt = self.detect_format(filepath)
+        filename = os.path.basename(filepath)
+        m = re.search(r'(\d+)', filename)
         tn = m.group(1) if m else "01"
         ty = Typhoon("WP", tn)
         ty.sim = self._sim
-        ty.filepath = fp
+        ty.filepath = filepath
         ty.format_type = fmt
         if fmt == FILE_FORMAT_JTWC:
-            ty.original_jtwc_source = fp
+            ty.original_jtwc_source = filepath
 
         last_basin = None
         for line in lines:
@@ -266,8 +275,6 @@ class DataRepository:
         self.tys[idx] = new_ty
         if self.edit_typhoon is ty:
             self.edit_typhoon = new_ty
-        if self.cti == idx:
-            self.cti = idx
         self._refresh_ace()
         if self._sim:
             self._sim.view.update_screen_points(self.tys, self.edit_typhoon)
@@ -333,10 +340,10 @@ class DataRepository:
     def get_point_color(self, wind: int, stype: str) -> Tuple[int, int, int]:
         cat = self.get_strength_category(wind, stype)
         if cat == "C5":
-            if wind >= 170:
+            if wind >= _C5_SUB_THRESHOLD_HIGH:
                 return C5_D
-            elif wind >= 155:
-                ratio = (wind - 155) / 15.0
+            elif wind >= _C5_SUB_THRESHOLD_MID:
+                ratio = (wind - _C5_SUB_THRESHOLD_MID) / _C5_INTERP_RANGE
                 r = int(C5_M[0] + (C5_D[0] - C5_M[0]) * ratio)
                 g = int(C5_M[1] + (C5_D[1] - C5_M[1]) * ratio)
                 b = int(C5_M[2] + (C5_D[2] - C5_M[2]) * ratio)

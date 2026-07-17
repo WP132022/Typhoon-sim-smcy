@@ -9,6 +9,7 @@ from typing import List
 from .constants import (
     f_s, f_m, rt, TXT, BUTTON_BORDER, BUTTON_BG, BUTTON_DISABLED,
     DIALOG_TITLE_BAR_HEIGHT,
+    darken_color, lighten_color,
 )
 from .dialog_base import DraggableDialog
 from .script_engine import scan_scripts
@@ -219,10 +220,8 @@ class ScriptDialog(DraggableDialog):
         pressed = hover and pygame.mouse.get_pressed()[0]
 
         if pressed:
-            from .constants import darken_color
             c = darken_color(color, 0.8)
         elif hover:
-            from .constants import lighten_color
             c = lighten_color(color, 1.2)
         else:
             c = color
