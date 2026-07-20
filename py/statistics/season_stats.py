@@ -148,7 +148,11 @@ def calculate_season_stats(
 
 def _compute_landfalls_from_data(sim, year, basin_code, stats):
     """从台风数据点检测登陆事件（用于没有播放记录时的统计）。
-    登陆强度使用登陆前一报的数据（不要插值）。"""
+    登陆强度使用登陆前一报的数据（不要插值）。
+    采样基于地理坐标（视图无关，与播放时登陆判定一致）。"""
+    mm = sim.map_mgr
+    if mm._load_land_orig() is None:
+        return
     for ty in sim.tys:
         year_pts = [p for p in ty.pts if p.get('ace_year') == year]
         if not year_pts:
@@ -163,16 +167,7 @@ def _compute_landfalls_from_data(sim, year, basin_code, stats):
         prev_on_land = None
         prev_p = None
         for p in year_pts:
-            x, y = sim.latlon_to_screen(p['la'], p['lo'])
-            if not (0 <= x < sim.screen_width and 0 <= y < sim.map_height):
-                prev_on_land = None
-                prev_p = p
-                continue
-            if sim.map_mgr.land_img is None:
-                sim.map_mgr.update_land_mask()
-            if sim.map_mgr.land_img is None:
-                break
-            cur_on_land = sim.map_mgr.is_land_at_screen(x, y)
+            cur_on_land = mm.is_land_at_geo(p['la'], p['lo'])
             if prev_on_land is False and cur_on_land is True:
                 stats['landfall_count'] += 1
                 # 使用登陆前一报的强度（prev_p），不要插值后的当前报

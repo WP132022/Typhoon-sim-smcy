@@ -10,7 +10,7 @@ from .constants import (
     SETTINGS_DARK_BG, SETTINGS_DARK_OVERLAY, settings_accent,
     SETTINGS_TEXT_LIGHT, SETTINGS_TEXT_DIM,
     SETTINGS_TOGGLE_ON, SETTINGS_TOGGLE_OFF,
-    DIALOG_CORNER_RADIUS,
+    DIALOG_CORNER_RADIUS, DIALOG_BORDER_WIDTH,
     f_s, f_m
 )
 
@@ -33,8 +33,6 @@ BTN_LIGHT_HOVER = (130, 170, 220)
 
 DIALOG_BG = LIST_BG
 DIALOG_BORDER = BUTTON_BORDER
-DIALOG_BORDER_WIDTH = 2
-DIALOG_RADIUS = 10
 
 
 class Dialog:
@@ -120,7 +118,7 @@ class Dialog:
                         color: Tuple = DIALOG_BG,
                         border_color: Tuple = DIALOG_BORDER,
                         alpha: bool = True,
-                        radius: int = DIALOG_RADIUS) -> None:
+                        radius: int = DIALOG_CORNER_RADIUS) -> None:
         key = (rect.width, rect.height, color, border_color, radius)
         bg = self._bg_cache.get(key)
         if bg is None:

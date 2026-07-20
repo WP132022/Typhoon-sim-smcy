@@ -5,6 +5,8 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from typing import Dict, Optional, TYPE_CHECKING
 
+import pygame
+
 from .constants import SEASON_SPEED_DEFAULT, HEMISPHERE_NORTH, HEMISPHERE_SOUTH
 
 if TYPE_CHECKING:
@@ -35,6 +37,8 @@ class SeasonController:
         self.yf: bool = False
         self._start_cache: Dict[Typhoon, datetime] = {}
         self._dialog_mgr: object = None
+        self._pending: Optional[list] = None      # 未激活台风列表（激活后移除）
+        self._pending_src: tuple = ()
 
     def bind(self, dialog_mgr: object = None) -> None:
         self._dialog_mgr = dialog_mgr
@@ -92,7 +96,15 @@ class SeasonController:
         self.st = current_dt.strftime("%m%d%H")
         self.current_ace_year = self.ace_engine.ace_year(current_dt)
 
-        for ty in self.repo.tys:
+        # ── 待激活列表：只扫描未开始的台风，激活后移除 ──
+        src = (id(self.repo.tys), len(self.repo.tys))
+        if self._pending is None or src != self._pending_src or self.yf:
+            self._pending = [ty for ty in self.repo.tys
+                             if not ty.ss and not ty.sf and ty.pts]
+            self._pending_src = src
+
+        still_pending = []
+        for ty in self._pending:
             if ty.ss or ty.sf or not ty.pts:
                 continue
             start_dt = self._start_cache.get(ty)
@@ -113,6 +125,10 @@ class SeasonController:
             if current_dt >= start_dt:
                 ty.ss = True
                 ty.act = True
+                ty.v._spawn_time = pygame.time.get_ticks()
+            else:
+                still_pending.append(ty)
+        self._pending = still_pending
 
     def calc_accumulated_ace_up_to(self, y: int, m: int, d: int, h: int) -> float:
         return self.ace_engine.cumulative_ace_up_to(datetime(y, m, d, h))
@@ -142,6 +158,7 @@ class SeasonController:
         self._csa_base = self.csa
         self.current_ace_year = self.get_ace_year(dt)
         self._start_cache.clear()
+        self._pending = None
         self.yf = False
         for ty in self.repo.tys:
             ty.rst()
@@ -162,6 +179,7 @@ class SeasonController:
                 ty.sf = False
                 ty.set_current_time(dt)
                 ty.last_ace_ci = ty.ci
+                ty.v._spawn_time = pygame.time.get_ticks()
 
     def reset_to_first_year(self) -> None:
         """重置风季状态到最早年份的1月1日（南半球则为7月1日），并同步所有台风状态。"""
@@ -176,7 +194,11 @@ class SeasonController:
         self.csa = 0.0
         self.current_ace_year = self.ace_engine.ace_year(datetime(self.sty, month, day, hour))
         self._start_cache.clear()
+        self._pending = None
         self.yf = False
+        # 年循环：清空 finish note 记录让台风重新触发
+        if self._dialog_mgr and hasattr(self._dialog_mgr.sim, 'playback_ctrl'):
+            self._dialog_mgr.sim.playback_ctrl._was_fin.clear()
         for ty in self.repo.tys:
             ty.rst()
             ty.ss = False

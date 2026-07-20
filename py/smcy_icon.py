@@ -36,33 +36,43 @@ _TOTAL_FRAMES = 1800
 _FRAME_INTERVAL_MS = int(1000.0 / _FPS)
 
 _VIDEO_EXT = '.mp4'
-_CACHE_MAX = 120
-_SMCY_SPEED = 1.0
-_MAX_STREAMS = 8
+_CACHE_MAX = 240
+_CACHE_BYTES_PER_STREAM = 48 * 1024 * 1024   # 单流帧缓存内存上限（大图标时自动降帧数）
+_DECODE_BUDGET_PER_WIN = 3      # 每流每 ~16ms 窗口最多解码帧数（防多台风随机 seek 卡顿）
+_MAX_CURSORS = 4                # 每流最多解码游标数（多台风共享同类别视频时避免来回 seek）
+_SEQ_WINDOW = 45                # 游标允许 grab 快进的最大帧距
 
 
-def _is_ex_category(cat: str) -> bool:
-    return cat == 'EX'
+def _compose_bgra(frame_bgr: np.ndarray) -> np.ndarray:
+    """BGR → BGRA，alpha = max(B,G,R)。全部走 cv2 C 实现（比 numpy axis 归约快一个量级）。"""
+    b, g, r = cv2.split(frame_bgr)
+    a = cv2.max(cv2.max(b, g), r)
+    return cv2.merge((b, g, r, a))
 
 
 def _frame_to_surface(frame_bgr: np.ndarray) -> pygame.Surface:
-    """BGR 帧转 BGRA Surface，alpha = max(R,G,B)。numpy 加速版。"""
-    alpha = frame_bgr.max(axis=2).astype(np.uint8)
-    frame_bgra = np.dstack([frame_bgr, alpha])
+    """BGR 帧转 BGRA Surface，alpha = max(R,G,B)。"""
+    frame_bgra = _compose_bgra(frame_bgr)
     return pygame.image.frombuffer(frame_bgra.tobytes(), frame_bgra.shape[1::-1], 'BGRA')
 
 
 class _VideoStream:
-    """单个视频的流式读取 + OrderedDict 帧缓存（O(1) 驱逐）。"""
+    """单个视频的流式读取 + OrderedDict 帧缓存（O(1) 驱逐）。
+
+    多游标：同一类别视频被多个台风以不同帧号播放时，为每个前进序列
+    维护独立 VideoCapture 游标，顺序 read（~0.4ms）替代随机 seek（~5ms）。"""
 
     def __init__(self, path: str) -> None:
+        self._path = path
         self._cap = cv2.VideoCapture(path)
+        self._cursors: list = [{'cap': self._cap, 'pos': None, 'use': 0}]
         self._cache: OrderedDict[int, pygame.Surface] = OrderedDict()
         self._orig_w: int = 0
         self._orig_h: int = 0
         self._frame_count: int = _TOTAL_FRAMES
         self._scale_size: Optional[Tuple[int, int]] = None
-        self._last_pos: Optional[int] = None
+        self._decode_win: int = -1
+        self._decode_n: int = 0
         if self._cap.isOpened():
             self._orig_w = int(self._cap.get(cv2.CAP_PROP_FRAME_WIDTH))
             self._orig_h = int(self._cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
@@ -82,36 +92,71 @@ class _VideoStream:
         if self._scale_size != size:
             self._scale_size = size
             self._cache.clear()
-            self._last_pos = None
+
+    def _cache_cap(self) -> int:
+        """按目标尺寸限制缓存帧数，控制单流内存占用。"""
+        if not self._scale_size:
+            return _CACHE_MAX
+        px = self._scale_size[0] * self._scale_size[1] * 4
+        return max(16, min(_CACHE_MAX, _CACHE_BYTES_PER_STREAM // max(1, px)))
+
+    def _read_at(self, idx: int):
+        """用最合适的游标读取指定帧：可快进则 grab+read，否则 seek（新开/复用游标）。"""
+        now = pygame.time.get_ticks()
+        best = None
+        for c in self._cursors:
+            p = c['pos']
+            if p is not None and p < idx and idx - p <= _SEQ_WINDOW:
+                if best is None or p > best['pos']:
+                    best = c
+        if best is not None:
+            for _ in range(idx - best['pos'] - 1):
+                best['cap'].grab()
+            ret, frame_bgr = best['cap'].read()
+        else:
+            if len(self._cursors) < _MAX_CURSORS:
+                cap = cv2.VideoCapture(self._path)
+                if cap.isOpened():
+                    best = {'cap': cap, 'pos': None, 'use': 0}
+                    self._cursors.append(best)
+            if best is None:
+                best = min(self._cursors, key=lambda c: c['use'])
+            best['cap'].set(cv2.CAP_PROP_POS_FRAMES, idx)
+            ret, frame_bgr = best['cap'].read()
+        best['pos'] = idx
+        best['use'] = now
+        return ret, frame_bgr
 
     def get_frame(self, idx: int, target_size: Optional[Tuple[int, int]] = None) -> Optional[pygame.Surface]:
         idx = idx % self._frame_count
         if target_size and target_size != self._scale_size:
             self._scale_size = target_size
             self._cache.clear()
-            self._last_pos = None
         if idx in self._cache:
             self._cache.move_to_end(idx)
             return self._cache[idx]
 
-        if self._last_pos is not None and self._last_pos < idx and idx - self._last_pos <= 30:
-            skip = idx - self._last_pos - 1
-            for _ in range(skip):
-                self._cap.grab()
-            ret, frame_bgr = self._cap.read()
-        else:
-            self._cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
-            ret, frame_bgr = self._cap.read()
+        # 解码预算：超出预算时复用最近邻缓存帧，避免瞬时卡顿
+        win = pygame.time.get_ticks() >> 4
+        if win != self._decode_win:
+            self._decode_win = win
+            self._decode_n = 0
+        if self._decode_n >= _DECODE_BUDGET_PER_WIN and self._cache:
+            nearest = min(self._cache.keys(), key=lambda k: abs(k - idx))
+            return self._cache[nearest]
+        self._decode_n += 1
 
-        self._last_pos = idx
-
+        ret, frame_bgr = self._read_at(idx)
         if not ret:
             return None
+        # 原生分辨率合成 alpha（像素少），再一次性缩放 BGRA
+        frame_bgra = _compose_bgra(frame_bgr)
         if self._scale_size:
-            frame_bgr = cv2.resize(frame_bgr, self._scale_size, interpolation=cv2.INTER_LINEAR)
-        surf = _frame_to_surface(frame_bgr)
+            frame_bgra = cv2.resize(frame_bgra, self._scale_size, interpolation=cv2.INTER_LINEAR)
+        surf = pygame.image.frombuffer(frame_bgra.tobytes(), frame_bgra.shape[1::-1], 'BGRA')
         self._cache[idx] = surf
-        if len(self._cache) > _CACHE_MAX:
+        cap = self._cache_cap()
+        while len(self._cache) > cap:
             self._cache.popitem(last=False)
         return surf
 
@@ -121,9 +166,18 @@ class _VideoStream:
             self.get_frame(i)
 
     def release(self) -> None:
-        self._cap.release()
+        for c in self._cursors:
+            c['cap'].release()
+        self._cursors = [{'cap': self._cap, 'pos': None, 'use': 0}]
         self._cache.clear()
-        self._last_pos = None
+
+
+_SMCY_SPEED = 1.0
+_MAX_STREAMS = 20   # (类别×南北半球) 组合数上限；过小会导致 LRU 反复驱逐重开视频
+
+
+def _is_ex_category(cat: str) -> bool:
+    return cat == 'EX'
 
 
 class SMCYIconManager:
@@ -281,6 +335,7 @@ _LANDFALL_MAP = {
 }
 
 _landfall_cache: Dict[Tuple[str, int, int], list] = {}
+_LANDFALL_CACHE_MAX = 24        # 不同尺寸组合上限（缩放/图标尺寸变化时旧条目淘汰）
 
 
 def get_landfall_frames(category: str, target_w: int = 0, target_h: int = 0) -> Optional[list]:
@@ -306,9 +361,118 @@ def get_landfall_frames(category: str, target_w: int = 0, target_h: int = 0) -> 
             frame_bgr = cv2.resize(frame_bgr, (target_w, target_h), interpolation=cv2.INTER_LINEAR)
         frames.append(_frame_to_surface(frame_bgr))
     cap.release()
+    if len(_landfall_cache) >= _LANDFALL_CACHE_MAX:
+        _landfall_cache.pop(next(iter(_landfall_cache)))
     _landfall_cache[cache_key] = frames
     logger.info(f"SMCY 登陆特效: 加载 {name}.mp4 ({len(frames)} 帧, {target_w}x{target_h})")
     return frames
+
+
+# ── Landed 落地标记动画（流式，一次性播放） ──
+
+_LANDED_MAP = {
+    'C1': 'Landed-C1', 'C2': 'Landed-C2', 'C2-': 'Landed-C2',
+    'C3': 'Landed-C3', 'C3-': 'Landed-C3',
+    'C4': 'Landed-C4', 'C4-ST': 'Landed-C4',
+    'C5': 'Landed-C5',
+    'TS': 'Landed-S', 'STS': 'Landed-S', 'SS': 'Landed-S',
+    'TD': 'Landed-D', 'SD': 'Landed-D',
+}
+
+_landed_streams: Dict[str, _VideoStream] = {}
+_MAX_LANDED_STREAMS = 8
+
+
+def landed_frame_count(category: str) -> int:
+    """Landed 视频总帧数；无对应视频返回 0。"""
+    stream = _open_landed(category)
+    return stream._frame_count if stream else 0
+
+
+def _open_landed(category: str) -> Optional[_VideoStream]:
+    name = _LANDED_MAP.get(category)
+    if name is None:
+        return None
+    stream = _landed_streams.get(name)
+    if stream is None:
+        path = os.path.join(SUCAI_DIR, ICON_SET_SMCY, 'landfall', f'{name}.mp4')
+        if not os.path.exists(path):
+            return None
+        stream = _VideoStream(path)
+        if not stream.is_open:
+            return None
+        _landed_streams[name] = stream
+        while len(_landed_streams) > _MAX_LANDED_STREAMS:
+            oldest = next(iter(_landed_streams))
+            _landed_streams[oldest].release()
+            del _landed_streams[oldest]
+    return stream
+
+
+def get_landed_frame(category: str, idx: int,
+                     target_size: Optional[Tuple[int, int]] = None) -> Optional[pygame.Surface]:
+    """获取 Landed 动画的指定帧（一次性播放：越界返回 None）。"""
+    stream = _open_landed(category)
+    if stream is None or idx < 0 or idx >= stream._frame_count:
+        return None
+    return stream.get_frame(idx, target_size)
+
+
+def preload_landfall_effects(lf_size: int, landed_size: int = 0) -> None:
+    """预加载全部登陆特效帧与 Landed 流，避免登陆瞬间的解码卡顿。"""
+    seen = set()
+    for cat, name in _LANDFALL_MAP.items():
+        if name in seen:
+            continue
+        seen.add(name)
+        get_landfall_frames(cat, lf_size, lf_size)
+    seen.clear()
+    for cat, name in _LANDED_MAP.items():
+        if name in seen:
+            continue
+        seen.add(name)
+        stream = _open_landed(cat)
+        if stream is not None and landed_size > 0:
+            stream.get_frame(0, (landed_size, landed_size))
+    logger.info(f"登陆特效预加载完成 (lf={lf_size}, landed={landed_size})")
+
+
+def preload_icon_streams(data: list, target_size: int = 0) -> int:
+    """按台风数据中出现的 (类别, 半球) 预打开 SMCY 图标视频流，
+    解码首帧到缓存（避免播放时 OpenCV seek 卡顿）。
+    返回实际打开的流数（上限受 _MAX_STREAMS 约束）。"""
+    mgr = get_smcy_manager()
+    categories = set()
+    for ty in data:
+        cat = None
+        try:
+            cat = ty.pts[0].get('cat', '')
+        except (IndexError, AttributeError):
+            pass
+        if cat in _TC_CATEGORIES:
+            categories.add(cat)
+        elif cat in _EX_CATEGORIES:
+            categories.add(cat)
+    # 保证最常用强度级别始终预打开
+    for cat in ('C4', 'C3', 'C2', 'C1', 'TS', 'TD'):
+        if cat not in categories:
+            categories.add(cat)
+    opened = 0
+    available = _MAX_STREAMS - len(mgr._streams)
+    for cat in sorted(categories):
+        for hemi in (HEMISPHERE_NORTH, HEMISPHERE_SOUTH):
+            if available <= 0:
+                return opened
+            key = mgr._make_key(cat, hemi)
+            if key in mgr._streams:
+                continue
+            mgr._open(cat, hemi)
+            if key in mgr._streams:
+                available -= 1
+                if target_size > 0:
+                    mgr._streams[key].get_frame(0, (target_size, target_size))
+                opened += 1
+    return opened
 
 
 # ── 摘要视频 ──
@@ -374,6 +538,41 @@ def set_summary_scale(w: int, h: int) -> None:
     size = (w, h)
     for stream in _summary_streams.values():
         stream.set_scale_size(size)
+
+
+def preload_summary_streams(data: list, bar_h: int = 64) -> int:
+    """按台风数据中出现的 (类别, 半球) 预打开摘要视频流并解码首帧。
+    返回实际打开的流数。"""
+    from .summary_effect import TyphoonSummary
+    cats = set()
+    for ty in data:
+        cat = TyphoonSummary._find_peak(ty)
+        if cat and cat in _SUMMARY_CATS:
+            cats.add(cat)
+    for cat in ('C5', 'C4', 'C3', 'C2', 'C1', 'TS', 'TD'):
+        if cat not in cats:
+            cats.add(cat)
+    target = None
+    if bar_h > 0:
+        target = (bar_h * 1920 // 96, bar_h)
+    opened = 0
+    for cat in sorted(cats):
+        for hemi in ('N', 'S'):
+            if has_summary_video(cat, hemi):
+                key = f"{hemi}:{cat}"
+                if key not in _summary_streams:
+                    stream = _VideoStream(_summary_video_path(cat, hemi))
+                    if stream.is_open:
+                        _summary_streams[key] = stream
+                        while len(_summary_streams) > _MAX_SUMMARY_STREAMS and _summary_access:
+                            oldest = _summary_access.pop(0)
+                            if oldest in _summary_streams:
+                                _summary_streams[oldest].release()
+                                del _summary_streams[oldest]
+                        if target:
+                            stream.get_frame(0, target)
+                        opened += 1
+    return opened
 
 
 _smcy_manager: Optional[SMCYIconManager] = None

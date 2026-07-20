@@ -40,24 +40,31 @@ class TyphoonRenderMixin:
             v._smooth_arc_lengths = compute_arc_lengths(smooth_sc)
 
     def _get_rotated(self, key_prefix: str, img: pygame.Surface, angle: float,
-                     mirror: bool) -> pygame.Surface:
-        key = (key_prefix, int(angle) % 360, mirror)
+                     mirror: bool, tint=None) -> pygame.Surface:
+        key = (key_prefix, int(angle) % 360, mirror, tint)
         cache = self.v._img_cache
         if key in cache:
             return cache[key]
         rotated = pygame.transform.rotate(img, angle)
         if mirror:
             rotated = pygame.transform.flip(rotated, True, False)
+        if tint is not None:
+            tinted = pygame.Surface(rotated.get_size(), pygame.SRCALPHA)
+            tinted.fill((*tint, 0))
+            tinted.blit(rotated, (0, 0), special_flags=pygame.BLEND_RGBA_ADD)
+            rotated = tinted
+        if len(cache) > 720:
+            cache.pop(next(iter(cache)))
         cache[key] = rotated
         return rotated
 
     def get_rotated_ring(self, cat: str, base_ring: pygame.Surface, angle: float,
-                          mirror: bool) -> pygame.Surface:
-        return self._get_rotated(cat, base_ring, angle, mirror)
+                          mirror: bool, tint=None) -> pygame.Surface:
+        return self._get_rotated(cat, base_ring, angle, mirror, tint)
 
     def get_rotated_level3_ring(self, cat: str, base_ring: pygame.Surface, angle: float,
-                                 mirror: bool) -> pygame.Surface:
-        return self._get_rotated(cat, base_ring, angle, mirror)
+                                 mirror: bool, tint=None) -> pygame.Surface:
+        return self._get_rotated(cat, base_ring, angle, mirror, tint)
 
     def update_rotation(self, dt: float) -> None:
         mf = self.sim.main_rotation_speed if self.sim else 1.0

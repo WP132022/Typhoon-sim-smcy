@@ -6,10 +6,10 @@ import pygame
 from typing import List, Optional, TYPE_CHECKING
 
 from .typhoon import Typhoon
-from .landfall_effect import LandfallEffect, LandfallEffectSMCY
+from .landfall_effect import LandfallEffect, LandfallEffectSMCY, LandedEffect
 from .particle_effect import RIEffect, TSNoteEffect, play_eri_sound, play_note_ts_sound
 from .ace_engine import _ace_eligible
-from .utils import get_tropical_points
+from .utils import get_tropical_points, play_sound
 from .constants import FADE_DURATION, ICON_SET_SMCY, MODE_NORMAL, MODE_SEASON, MODE_EDIT
 
 if TYPE_CHECKING:
@@ -21,7 +21,6 @@ if TYPE_CHECKING:
     from .season_ctrl import SeasonController
 
 
-RI_COOLDOWN = 1.0    # points_time 单位，1.0 = 12h 冷却
 RI_WIND_INCREASE_KT = 60
 RI_OFFICIAL_INTERVALS = 4
 FADE_COOLDOWN_MS = 500
@@ -42,9 +41,9 @@ class PlaybackController:
         self.effects: List[LandfallEffect] = []
         self.landfall_records: list = []
         self._pl: bool = False
-        self._interp_ci_map: dict = {}
         self.ace_note: Optional[dict] = None
         self._was_fin: dict = {}
+        self._lf_last: dict = {}
 
     def latlon_to_screen(self, la: float, lo: float) -> tuple:
         return self.view.latlon_to_screen(la, lo)
@@ -54,8 +53,21 @@ class PlaybackController:
         paused = not self._pl or dialog_open
         md = self.cfg.md
         current = self.repo.current_typhoon() if md == MODE_NORMAL else None
+        edit_ty = self.repo.edit_typhoon if md == MODE_EDIT else None
         self.map_mgr.update_land_mask()
+        fade_ms = FADE_DURATION * 1000.0
         for typhoon in self.repo.tys:
+            # ── 静止台风快速跳过：既不在运动，也不在淡出窗口 ──
+            if md == MODE_NORMAL:
+                moving = typhoon is current
+            elif md == MODE_SEASON:
+                moving = typhoon.act and typhoon.ss and not typhoon.sf
+            else:
+                moving = typhoon is edit_ty
+            if not moving:
+                ft = typhoon.finish_time
+                if ft <= 0 or ct - ft >= fade_ms:
+                    continue
             if typhoon.act:
                 typhoon.us(dt)
             self._fade_one(typhoon, ct)
@@ -73,10 +85,11 @@ class PlaybackController:
                 if self.repo.edit_typhoon == typhoon:
                     self._update_edit(typhoon, ct, paused)
         self.effects = [e for e in self.effects if e.update(ct)]
-        if md == MODE_SEASON and not paused and season_ctrl and self.cfg.ace_interpolated:
-            season_ctrl.csa = self._compute_interpolated_csa(season_ctrl)
-        elif season_ctrl is not None:
-            season_ctrl.set_csa_base(season_ctrl.csa)
+        if md == MODE_SEASON and not paused and season_ctrl:
+            if self.cfg.ace_interpolated:
+                season_ctrl.csa = self._compute_interpolated_csa(season_ctrl)
+            else:
+                season_ctrl.csa = season_ctrl.csa_base
 
     def _fade_one(self, typhoon: Typhoon, ct: float) -> None:
         if typhoon.finish_time <= 0:
@@ -152,7 +165,7 @@ class PlaybackController:
 
     def _compute_interpolated_csa(self,
                                     season_ctrl: SeasonController) -> float:
-        """基于增量 CSA 只对活跃台风的当前点做插值修正，不再扫描全部台风×全部点。"""
+        """csa_base(已确认部分) + 各活跃台风向下一报点的插值部分。"""
         cur_year = season_ctrl.current_ace_year
         total = season_ctrl.csa_base
         for typhoon in self.repo.tys:
@@ -161,15 +174,6 @@ class PlaybackController:
             if typhoon.ci < 0 or typhoon.ci >= len(typhoon.pts) - 1:
                 continue
             pts = typhoon.pts
-            prev_ci = self._interp_ci_map.get(typhoon, -1)
-            cur_ci = typhoon.ci
-            if prev_ci >= 0 and cur_ci > prev_ci:
-                for i in range(prev_ci + 1, cur_ci + 1):
-                    p = pts[i]
-                    if p.get('pace', 0) > 0 and p.get('ace_year', 0) == cur_year:
-                        if self.ace_engine.point_in_limit(p['la'], p['lo']):
-                            total += p['pace']
-            self._interp_ci_map[typhoon] = cur_ci
             pt_next = pts[typhoon.ci + 1]
             if pt_next.get('pace', 0) > 0 and pt_next.get('ace_year', 0) == cur_year:
                 if self.ace_engine.point_in_limit(pt_next['la'], pt_next['lo']):
@@ -200,35 +204,32 @@ class PlaybackController:
                         season_ctrl: Optional[SeasonController] = None) -> None:
         if not typhoon.act:
             return
+        mm = self.map_mgr
+        if mm._load_land_orig() is None:
+            return
         ace_limit_mode = self.cfg.ace_limit_mode
         if ace_limit_mode == "basin" and self.cfg.ace_limit_basin:
             area = self.res_mgr.ocean_areas.get_by_code(self.cfg.ace_limit_basin)
             if area is not None and not self.repo._ty_in_filter_basin(typhoon, area):
                 pos = typhoon.cpos()
                 if pos:
-                    x, y = self.view.latlon_to_screen(pos['la'], pos['lo'])
-                    w, h = self.view.screen_width, self.view.map_height
-                    if 0 <= x < w and 0 <= y < h:
-                        if self.map_mgr.land_img is not None:
-                            typhoon.v.last_on_land = self.map_mgr.is_land_at_screen(x, y)
+                    typhoon.v.last_on_land = mm.is_land_at_geo(pos['la'], pos['lo'])
                 return
         pos = typhoon.cpos()
         if not pos:
             return
-        x, y = self.view.latlon_to_screen(pos['la'], pos['lo'])
-        w, h = self.view.screen_width, self.view.map_height
-        if not (0 <= x < w and 0 <= y < h):
+        # 登陆判定完全基于地理坐标（视图无关）：拖动/缩放地图不影响结果；
+        # 地理位置未变化时跳过采样（暂停/低速时避免每帧检测）
+        lkey = (round(pos['la'] * 1000), round(pos['lo'] * 1000))
+        if self._lf_last.get(typhoon) == lkey:
             return
-        if self.map_mgr.land_img is None:
-            return
-        is_land = self.map_mgr.is_land_at_screen(x, y)
+        self._lf_last[typhoon] = lkey
+        is_land = mm.is_land_at_geo(pos['la'], pos['lo'])
         v = typhoon.v
         if is_land and not v.last_on_land:
             current_point = typhoon.cp()
             if current_point:
-                adv_x, adv_y = self.view.latlon_to_screen(current_point['la'], current_point['lo'])
-                adv_on_land = (0 <= adv_x < w and 0 <= adv_y < h
-                               and self.map_mgr.is_land_at_screen(adv_x, adv_y))
+                adv_on_land = mm.is_land_at_geo(current_point['la'], current_point['lo'])
                 if adv_on_land and typhoon.ci > 0:
                     prev_pt = typhoon.pts[typhoon.ci - 1]
                     landfall_wind = prev_pt.get('w', current_point.get('w', 0))
@@ -248,11 +249,16 @@ class PlaybackController:
                     'la': pos['la'],
                     'lo': pos['lo'],
                 })
-                if typhoon.ci != 0:
+                # 特效与音效仅在登陆点位于屏幕内时播放（记录始终保留）
+                sx, sy = self.view.latlon_to_screen(pos['la'], pos['lo'])
+                on_screen = (0 <= sx < self.view.screen_width
+                             and 0 <= sy < self.view.map_height)
+                if typhoon.ci != 0 and on_screen:
                     lf_color = self.repo.get_point_color(landfall_wind, landfall_st)
                     lf_label = f"{landfall_wind}kt"
                     if landfall_pres:
                         lf_label += f" {landfall_pres}mb"
+                    lf_scale = self.cfg.peak_label_size / 100.0
                     if self.cfg.icon_set == ICON_SET_SMCY:
                         from .smcy_icon import get_landfall_frames
                         icon_factor = self.cfg.icon_size / 100.0
@@ -262,18 +268,28 @@ class PlaybackController:
                             self.effects.append(LandfallEffectSMCY(
                                 strength, pos['lo'], pos['la'], frames, ct,
                                 self.view.latlon_to_screen,
-                                label=lf_label, label_color=lf_color))
+                                label=lf_label, label_color=lf_color,
+                                label_scale=lf_scale))
                     else:
                         img1, img2 = self.res_mgr.get_landfall_images(strength)
                         if img1 and img2:
                             self.effects.append(LandfallEffect(
                                 strength, pos['lo'], pos['la'], img1, img2, ct,
                                 self.view.latlon_to_screen,
-                                label=lf_label, label_color=lf_color))
+                                label=lf_label, label_color=lf_color,
+                                label_scale=lf_scale))
                     sound = self.res_mgr.get_sound(strength)
                     if sound:
-                        sound.set_volume(self.cfg.volume)
-                        sound.play()
+                        play_sound(sound, self.cfg.volume)
+
+                    # ── Landed 落地标记动画 ──
+                    prf = self.cfg.point_size / 100.0
+                    marker_size = max(6, int(13 * prf))
+                    landed = LandedEffect(strength, pos['lo'], pos['la'], ct,
+                                          self.view.latlon_to_screen,
+                                          int(marker_size * 96 / 40))
+                    if landed._count > 0:
+                        self.effects.append(landed)
         v.last_on_land = is_land
 
     def _check_finish_note(self, typhoon: Typhoon, ct: float) -> None:
@@ -318,31 +334,34 @@ class PlaybackController:
                 break
 
     def _check_ri_effect(self, typhoon: Typhoon, prev_ci: int, ct: float) -> None:
-        """检测 RI 事件：在所有官方报对中找后-前风速差最大者，≥60kt 且冷却满 12h 时触发。"""
+        """检测 RI 事件：越过的官方报相对之前 ≤4 个官方报增幅 ≥60kt 时触发。
+        一个巅峰只触发一次：触发后需等风速回落（越过巅峰）才重新武装。"""
         if not self.cfg.show_ri_effect:
             return
         pts = typhoon.pts
         new_ci = typhoon.ci
-        if new_ci == prev_ci or new_ci <= 0 or len(pts) < 2:
+        if new_ci <= prev_ci or len(pts) < 2:
             return
-        # 12h 冷却
-        if typhoon.at - typhoon.v._last_ri_at < RI_COOLDOWN:
-            return
-        # 扫描所有官方报对，找后-前风速差最大者
+        v = typhoon.v
         officials = [i for i, p in enumerate(pts) if p.get('official', False)]
-        best_diff = 0
-        best_i = -1
         for j in range(1, len(officials)):
             pj = officials[j]
+            if pj <= prev_ci:
+                continue
+            if pj > new_ci:
+                break
+            # 风速回落 → 已越过一个巅峰，重新武装
+            if pts[pj]['w'] < pts[officials[j - 1]]['w']:
+                v._ri_armed = True
+                continue
+            if not v._ri_armed:
+                continue
             for k in range(min(j, RI_OFFICIAL_INTERVALS)):
                 pi = officials[j - k - 1]
-                diff = pts[pj]['w'] - pts[pi]['w']
-                if diff >= RI_WIND_INCREASE_KT and diff > best_diff:
-                    best_diff = diff
-                    best_i = pi
-        if best_i >= 0:
-            icon_factor = self.cfg.icon_size / 100.0
-            self.effects.append(RIEffect(typhoon, ct, self.view.latlon_to_screen,
-                                          icon_factor, start_at=typhoon.points_time[best_i] if typhoon.points_time else 0))
-            play_eri_sound(self.cfg.volume)
-            typhoon.v._last_ri_at = typhoon.at
+                if pts[pj]['w'] - pts[pi]['w'] >= RI_WIND_INCREASE_KT:
+                    icon_factor = self.cfg.icon_size / 100.0
+                    self.effects.append(RIEffect(typhoon, ct, self.view.latlon_to_screen,
+                                                  icon_factor))
+                    play_eri_sound(self.cfg.volume)
+                    v._ri_armed = False
+                    break

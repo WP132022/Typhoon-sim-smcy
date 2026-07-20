@@ -56,14 +56,17 @@ class AppConfig:
     point_size: int = 100
     icon_size: int = 100
     name_size: int = 100
+    peak_label_size: int = 100
     fix_icon_point_size: bool = False
     fade_typhoon: bool = True
     fade_path: bool = True
     smooth_path: bool = False
     smooth_path_segments: int = 10
     path_mode: str = "markers"
+    show_future_path: bool = True
     ace_interpolated: bool = False
     show_fps: bool = False
+    fps_cap: int = 120
     monthly_summary: bool = True
 
     show_ri_effect: bool = True

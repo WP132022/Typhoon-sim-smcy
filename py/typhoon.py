@@ -55,14 +55,15 @@ _VIEW_FIELDS = frozenset({
     "ra", "sa", "sa3", "sa4", "sa5",
     "ipos", "rot_dir", "mirror", "last_on_land",
     "icon_alpha", "path_alpha",
-    "screen_points", "bbox",
+    "screen_points", "bbox", "_sp_ver",
     "_img_cache",
     "_path_cache_full", "_path_cache_traversed", "_last_rendered_ci",
     "_path_cache_key", "_path_cache_blit",
     "_path_cache_drag_surf", "_path_cache_drag_key", "_path_cache_drag_pos",
     "smooth_screen_points", "_smooth_arc_lengths",
     "_smcy_frame", "_smcy_last_cat", "_smcy_last_ticks",
-    "_last_ri_at",
+    "_last_ri_at", "_ri_armed",
+    "_spawn_time",
 })
 
 
@@ -83,6 +84,7 @@ class TyphoonView:
         self.path_alpha: int = 255
         self.screen_points: List[Tuple[int, int]] = []
         self.bbox: Optional[pygame.Rect] = None
+        self._sp_ver: int = -1
         self._img_cache: Dict[Tuple, pygame.Surface] = {}
         self._path_cache_full: Optional[pygame.Surface] = None
         self._path_cache_traversed: Optional[pygame.Surface] = None
@@ -97,6 +99,8 @@ class TyphoonView:
         self._smcy_last_cat: str = ""
         self._smcy_last_ticks: int = 0
         self._last_ri_at: float = -999.0
+        self._ri_armed: bool = True
+        self._spawn_time: int = 0
 
 
 class Typhoon(TyphoonDataMixin, TyphoonSimMixin, TyphoonRenderMixin):
@@ -111,6 +115,7 @@ class Typhoon(TyphoonDataMixin, TyphoonSimMixin, TyphoonRenderMixin):
         '_undo_stack', '_redo_stack', '_last_partial_csa', '_last_partial_ci',
         'finish_time',
         '_cached_max_wind_color', '_cached_name_colors', '_cached_peaks',
+        '_cached_landfalls',
         '_in_filter_basin', '_filter_basin_checked',
         '_v',
     )

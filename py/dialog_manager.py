@@ -20,6 +20,8 @@ from .statistics.heatmap import PathHeatmapDialog
 from .statistics.path_length_viewer import PathLengthViewer
 from .statistics.season_stats_dialog import SeasonStatsDialog
 from .statistics.intensity_comparison import IntensityComparisonDialog
+from .statistics.summary_list import SummaryListDialog
+from .statistics.multi_year_chart import MultiYearDialog
 
 
 class DialogManager:
@@ -38,6 +40,8 @@ class DialogManager:
         self.path_length_viewer = PathLengthViewer(sim)
         self.season_stats = SeasonStatsDialog(sim)
         self.intensity_comparison = IntensityComparisonDialog(sim)
+        self.summary_list = SummaryListDialog(sim)
+        self.multi_year = MultiYearDialog(sim)
 
     def handle_event(self, e: pygame.event.Event) -> bool:
         return any(d.handle_event(e) for d in self._all() if d.active)
@@ -61,4 +65,5 @@ class DialogManager:
                 self.point_edit_dialog, self.point_list, self.ace_chart,
                 self.intensity_chart, self.path_comparison, self.heatmap,
                 self.path_length_viewer, self.season_stats, self.intensity_comparison,
-                self.sim.script_dialog)
+                self.summary_list, self.multi_year,
+                getattr(self.sim, 'script_dialog', None))

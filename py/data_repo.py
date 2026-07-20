@@ -161,13 +161,6 @@ class DataRepository:
             parts = line.split(',')
             if len(parts) >= 1:
                 last_basin = parts[0].strip()
-        if last_basin:
-            ty.basin = last_basin
-
-        for line in lines:
-            if not line.strip() or line.startswith('#'):
-                continue
-            parts = line.split(',')
             if len(parts) < 11:
                 continue
             try:
@@ -209,6 +202,9 @@ class DataRepository:
             except Exception as e:
                 logger.warning(f"解析行失败: {line[:80]} - {e}")
                 continue
+
+        if last_basin:
+            ty.basin = last_basin
 
         if ty.pts:
             if ty.pts[-1]['name']:

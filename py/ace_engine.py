@@ -222,11 +222,17 @@ class ACEEngine:
             cnt = Counter(idx for idx, _ in cand)
             t2_times = [dt for idx, dt in cand if cnt[idx] == 1]
 
-            vw = [p['w'] for _, p in pts
+            vp = [p for _, p in pts
                   if p['st'].upper() not in ('MD', 'SS', 'SD', 'EX', 'LO')]
-            mx = max(vw) if vw else 0
-            sc = self._sim.get_strength_category(mx, '')
-            color = self._sim.get_point_color(mx, sc)
+            if vp:
+                mwp = max(vp, key=lambda p: p['w'])
+                mx = mwp['w']
+                sc = self._sim.get_strength_category(mx, mwp.get('st', ''))
+                color = self._sim.get_point_color(mx, mwp.get('st', ''))
+            else:
+                mx = 0
+                sc = self._sim.get_strength_category(0, '')
+                color = self._sim.get_point_color(0, '')
 
             periods.append({
                 'name_str': self._name(ty),
@@ -270,7 +276,11 @@ class ACEEngine:
         sim = self._sim
         sim.tsa = sum(ty.tace for ty in self._tys)
         sty, edy = self.season_years()
-        sim.sty, sim.edy, sim.sy = sty, edy, sty
+        sim.sty, sim.edy = sty, edy
+        # 仅在 sim.sy 未初始化或早于有效区间时才用 sty 初始化，
+        # 避免切换 ACE 设置时把当前模拟年份重置为最早台风年份
+        if sim.sy < sty:
+            sim.sy = sty
         sim.yad = self.yearly_ace()
         sim._ace_timeline_cache.clear()
         sim._ace_typhoon_cache.clear()

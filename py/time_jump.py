@@ -18,9 +18,10 @@ class TimeJump(DraggableDialog):
         super().__init__(s)
         self.fields: list[InputField] = []
         self.title = rt(f_m, "时间跳跃 (台风季模式)", TXT)
-        self.hint = rt(f_s, "使用Tab切换字段，Enter确认，ESC取消", TXT)
         self.confirm_text = rt(f_s, "确认", (255, 255, 255))
         self.cancel_text = rt(f_s, "取消", (255, 255, 255))
+        self._hint_light = rt(f_s, "使用Tab切换字段，Enter确认，ESC取消", TXT)
+        self._hint_dark = rt(f_s, "使用Tab切换字段，Enter确认，ESC取消", SETTINGS_TEXT_DIM)
         self.title_bar_height = DIALOG_TITLE_BAR_HEIGHT
 
     def activate(self):
@@ -36,7 +37,7 @@ class TimeJump(DraggableDialog):
         self.fields = []
         for i, (label, dv) in enumerate(zip(labels, defaults)):
             r = (dx + 120, dy + 80 + i * 45, 100, 24)
-            f = InputField(r, max_length=4, validator=str.isdigit)
+            f = InputField(r, max_length=4, validator=str.isdigit, dark=self.dark_mode)
             f.set_text(dv)
             self.fields.append(f)
         self.fields[0].activate()
@@ -63,11 +64,11 @@ class TimeJump(DraggableDialog):
             label_color = TXT
         for f in self.fields:
             f.draw(surface)
-        hint = rt(f_s, "使用Tab切换字段，Enter确认，ESC取消", hint_color)
-        surface.blit(hint, (self.dialog_rect.x + 50, self.dialog_rect.y + 310))
+        surface.blit(self._hint_dark if self.dark_mode else self._hint_light,
+                     (self.dialog_rect.x + 50, self.dialog_rect.y + 310))
         # 标签
         for i, label in enumerate(['年份:', '月份:', '日期:', '小时:']):
-            lb = rt(f_s, label, (255, 255, 255))
+            lb = rt(f_s, label, label_color)
             surface.blit(lb, (self.dialog_rect.x + 30, self.dialog_rect.y + 80 + i * 45 + 2))
         if self.dark_mode:
             self.draw_dark_button(surface, pygame.Rect(self.dialog_rect.x + 100, self.dialog_rect.y + 340, 80, 30), "确认", accent=True)
@@ -100,7 +101,7 @@ class TimeJump(DraggableDialog):
                 if f.rect.collidepoint(e.pos):
                     for g in self.fields:
                         g.deactivate()
-                    f.activate()
+                    f.activate_at(e.pos[0])
                     return True
 
         if e.type == pygame.KEYDOWN:

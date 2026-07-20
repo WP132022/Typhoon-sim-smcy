@@ -17,7 +17,8 @@ _CAT_COLOR = {'DB': DB, 'TD': TD, 'TS': TS, 'STS': STS, 'C1': C1,
 from .constants.fonts import _load_font, SmartFont, FONT_FILE
 from .smcy_icon import get_summary_frame, has_summary_video
 from .statistics.chart_helpers import _haversine
-from .utils import infer_strength_category
+from .utils import infer_strength_category, display_category, get_tropical_points
+from .ty_sim_mixins._draw_icon_mixin import _apply_purple_filter, _purple_tier
 
 if TYPE_CHECKING:
     from .typhoon import Typhoon
@@ -32,6 +33,7 @@ _font_bar_main = SmartFont(_load_font(FONT_FILE, 30, 30), _load_font(FONT_FILE, 
 
 _OUTLINE = [(-1, -1), (-1, 0), (-1, 1), (0, -1), (0, 1), (1, -1), (1, 0), (1, 1)]
 _WHITE = (255, 255, 255)
+_border_cache: dict = {}
 
 
 class TyphoonSummary:
@@ -40,7 +42,7 @@ class TyphoonSummary:
     GAP = 10
     MAX_VISIBLE = 3
     TOP_Y = 10
-    RIGHT_MARGIN = 355    # ACE 进度条左侧
+    RIGHT_MARGIN = 520    # ACE 进度条左侧
 
     def __init__(self, ty: Typhoon, start_time: float) -> None:
         self.ty = ty
@@ -55,7 +57,16 @@ class TyphoonSummary:
         self._frame_count = 0
         self._frame_idx = 0
 
-        self._max_wind = max((p['w'] for p in ty.pts), default=0) if ty.pts else 0
+        _pool = get_tropical_points(ty.pts) or ty.pts
+        self._max_wind = max((p['w'] for p in _pool), default=0) if _pool else 0
+        peak_pres = [p['p'] for p in _pool if p['w'] == self._max_wind and p['p']]
+        self._peak_pres = min(peak_pres) if peak_pres else 0
+        # 巅峰日期（首个最大风速点）
+        self._peak_date = ""
+        for p in _pool:
+            if p['w'] == self._max_wind and len(p.get('t', '')) >= 8:
+                self._peak_date = f"{p['t'][4:6]}/{p['t'][6:8]}"
+                break
         self._total_ace = ty.tace
         self._active_days = 0.0
         self._path_length = 0.0
@@ -72,6 +83,9 @@ class TyphoonSummary:
             for i in range(len(ty.pts) - 1):
                 p0, p1 = ty.pts[i], ty.pts[i + 1]
                 self._path_length += _haversine(p0['la'], p0['lo'], p1['la'], p1['lo'])
+        # 平均移速 (km/h)
+        self._avg_speed = (self._path_length / self._active_days
+                           if self._active_days > 0 else 0.0)
 
         self._slot: int = -1
         self._started = False
@@ -103,13 +117,12 @@ class TyphoonSummary:
 
     @staticmethod
     def _find_peak(ty: Typhoon) -> str:
-        wind = max((p['w'] for p in ty.pts), default=0)
-        st = ''
-        for p in ty.pts:
-            if p['w'] == wind:
-                st = p.get('st', '')
-                break
-        return infer_strength_category(wind, st)
+        """巅峰等级：优先取热带性质报点的最大风速点（连同其性质推断等级）。"""
+        pool = get_tropical_points(ty.pts) or ty.pts
+        if not pool:
+            return "TD"
+        mwp = max(pool, key=lambda p: p['w'])
+        return infer_strength_category(mwp['w'], mwp.get('st', ''))
 
     @classmethod
     def available_for(cls, ty: Typhoon) -> bool:
@@ -164,6 +177,10 @@ class TyphoonSummary:
         bar_w = int(self.BAR_H * 1920 / 96)
         target_size = (bar_w, self.BAR_H)
         frame = get_summary_frame(self._cat, self._hemi, self._frame_idx, target_size)
+        # 155+/170+ 紫色滤镜（仅热带 C5 巅峰）
+        tier = _purple_tier(self._max_wind) if self._cat == 'C5' else None
+        if frame is not None and tier is not None:
+            frame = _apply_purple_filter(frame, tier[1])
 
         target_y = self.TOP_Y + self._slot * (self.BAR_H + self.GAP)
         # 弹入/弹出：从上方滑入 + 淡入
@@ -177,15 +194,22 @@ class TyphoonSummary:
             frame.set_alpha(alpha)
             surface.blit(frame, (bar_rect.x, bar_rect.y))
 
-        # 台风等级颜色描边
-        border = pygame.Surface((bar_rect.w, bar_rect.h), pygame.SRCALPHA)
-        pygame.draw.rect(border, (*cat_color[:3], alpha), (0, 0, bar_rect.w, bar_rect.h), 2)
+        # 台风等级颜色描边（按 (尺寸,颜色,alpha量化) 缓存，避免每帧新建 Surface）
+        border_key = (bar_rect.w, bar_rect.h, cat_color[:3], alpha // 16)
+        border = _border_cache.get(border_key)
+        if border is None:
+            border = pygame.Surface((bar_rect.w, bar_rect.h), pygame.SRCALPHA)
+            pygame.draw.rect(border, (*cat_color[:3], min(255, (alpha // 16) * 16 + 15)),
+                             (0, 0, bar_rect.w, bar_rect.h), 2)
+            if len(_border_cache) >= 32:
+                _border_cache.pop(next(iter(_border_cache)))
+            _border_cache[border_key] = border
         surface.blit(border, (bar_rect.x, bar_rect.y))
 
         # ── 左侧两行：编号 + 等级（小字号）/ 台风名（中小字号） ──
         display_name = self.ty.cust or self.ty.sname or self.ty.name
         code = f"{self.ty.basin}{self.ty.n}" if self.ty.basin else f"{self.ty.b}{self.ty.n}"
-        line1 = f"{code} {self._cat}"
+        line1 = f"{code} {display_category(self._cat)}"
         s1 = rt(_font_bar_small, line1, _WHITE)
         s2 = rt(_font_bar_name, display_name, _WHITE)
         left_x = bar_rect.x + bar_rect.w // 5
@@ -196,12 +220,19 @@ class TyphoonSummary:
 
         # ── 右侧：剩余数据（中字号） ──
         if elapsed < self._fade + self._phase1:
-            text = f"风速: {self._max_wind} kt    ACE: {self._total_ace:.4f}"
+            intensity = f"{self._max_wind}kt"
+            if self._peak_pres:
+                intensity += f" {self._peak_pres}mb"
+            text = f"强度: {intensity}"
+            if self._peak_date:
+                text += f" ({self._peak_date})"
+            text += f"    ACE: {self._total_ace:.4f}"
         else:
             total_h = self._active_days
             d = int(total_h // 24)
             h = int(total_h % 24)
-            text = f"活跃时间: {d}d {h}h    路径长度: {self._path_length:.0f} km"
+            text = (f"活跃: {d}d {h}h    路径: {self._path_length:.0f} km"
+                    f"    均速: {self._avg_speed:.0f} km/h")
         st = rt(_font_bar_main, text, _WHITE)
         rx = bar_rect.right - 15 - st.get_width()
         ry = bar_rect.y + (bar_rect.h - st.get_height()) // 2

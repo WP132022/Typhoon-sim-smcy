@@ -5,8 +5,11 @@ import pygame
 from datetime import datetime, timedelta
 from typing import List, Tuple, Optional, Dict
 
-from ..constants import TXT, f_s, rt
-from .chart_helpers import DASH_COLOR, _get_dashed_h_surface
+from ..constants import f_s, rt
+from .chart_helpers import (_get_dashed_h_surface,
+                            chart_axis, chart_ink, chart_dash, chart_dark,
+                            nice_step, fmt_tick,
+                            draw_dashed_v)
 
 
 # ════════════════════ 每日 ACE 柱状图 ════════════════════
@@ -32,7 +35,7 @@ def draw_daily_ace_chart(
     if n_days == 0:
         return None
 
-    key = (id(daily_ace_list), rect.width, rect.height)
+    key = (id(daily_ace_list), rect.width, rect.height, chart_dark())
 
     if key not in _daily_ace_cache:
         cached = {}
@@ -70,20 +73,20 @@ def draw_daily_ace_chart(
                 max_labels.append((al, lx, ly))
 
         bw_line = 2
-        pygame.draw.line(chart_surf, TXT, (0, 0), (0, h), bw_line)
-        pygame.draw.line(chart_surf, TXT, (w - 1, 0), (w - 1, h), bw_line)
-        pygame.draw.line(chart_surf, TXT, (0, h - 1), (w, h - 1), bw_line)
+        pygame.draw.line(chart_surf, chart_axis(), (0, 0), (0, h), bw_line)
+        pygame.draw.line(chart_surf, chart_axis(), (w - 1, 0), (w - 1, h), bw_line)
+        pygame.draw.line(chart_surf, chart_axis(), (0, h - 1), (w, h - 1), bw_line)
 
         tick_labels = []
-        y_tick_step = 5.0 if y_max >= 30 else 2.0
+        y_tick_step = nice_step(y_max, 4)
         val = 0.0
         while val <= y_max:
             rel = val / y_max
             y_px = h - rel * h
-            lbl = rt(f_s, f"{val:.0f}", TXT)
+            lbl = rt(f_s, fmt_tick(val), chart_axis())
             tick_labels.append((lbl, int(y_px)))
             if val > 0.001:
-                dash_surf = _get_dashed_h_surface(w, DASH_COLOR)
+                dash_surf = _get_dashed_h_surface(w, chart_dash())
                 chart_surf.blit(dash_surf, (0, int(y_px)))
             val += y_tick_step
 
@@ -139,7 +142,7 @@ def draw_activity_count_chart(
     if n_days == 0:
         return None
 
-    key = (id(activity_count_list), rect.width, rect.height)
+    key = (id(activity_count_list), rect.width, rect.height, chart_dark())
 
     if key not in _activity_cache:
         cached = {}
@@ -168,15 +171,15 @@ def draw_activity_count_chart(
             pygame.draw.rect(chart_surf, color, br)
 
         tick_labels = []
-        y_tick_step = 3.0 if y_max >= 9 else 2.0
+        y_tick_step = max(1.0, round(nice_step(y_max, 4)))
         val = 0.0
         while val <= y_max:
             rel = val / y_max
             y_px = h - rel * h
-            lbl = rt(f_s, f"{val:.0f}", TXT)
+            lbl = rt(f_s, f"{val:.0f}", chart_axis())
             tick_labels.append((lbl, int(y_px)))
             if val > 0.001:
-                dash_surf = _get_dashed_h_surface(w, DASH_COLOR)
+                dash_surf = _get_dashed_h_surface(w, chart_dash())
                 chart_surf.blit(dash_surf, (0, int(y_px)))
             val += y_tick_step
 
@@ -225,7 +228,7 @@ def draw_active_periods_chart(
         return None, []
 
     bw = typhoon_bar_width
-    key = (id(active_periods), rect.width, rect.height, round(bw, 2))
+    key = (id(active_periods), rect.width, rect.height, round(bw, 2), chart_dark())
 
     cached = _active_periods_cache.get(key)
     if cached is None or cached.get('src') is not active_periods:
@@ -278,12 +281,13 @@ def draw_active_periods_chart(
                 overlay.fill(alpha_color)
                 chart_surf.blit(overlay, sr)
 
-            pygame.draw.rect(chart_surf, (0, 0, 0), bar_rect, 1)
+            pygame.draw.rect(chart_surf, chart_ink(), bar_rect, 1)
 
-            name_surf = period.get('name_surf')
+            nk = 'name_surf_d' if chart_dark() else 'name_surf'
+            name_surf = period.get(nk)
             if name_surf is None:
-                name_surf = rt(f_s, period['name_str'], (0, 0, 0))
-                period['name_surf'] = name_surf
+                name_surf = rt(f_s, period['name_str'], chart_ink())
+                period[nk] = name_surf
             name_entries.append((name_surf, bar_rect.left, bar_rect.centery))
 
             basin_name = (area_map.get(period.get('basin', ''), period.get('basin', ''))
@@ -334,7 +338,7 @@ def _make_curve_cache_key(
     rect_size: Tuple[int, int],
     year_total_ace: float,
 ) -> Tuple:
-    return (id(ace_curve_points), rect_size[0], rect_size[1], round(year_total_ace, 1))
+    return (id(ace_curve_points), rect_size[0], rect_size[1], round(year_total_ace, 1), chart_dark())
 
 
 def draw_curve_chart(
@@ -366,9 +370,9 @@ def draw_curve_chart(
         chart_surf = pygame.Surface((w, h), pygame.SRCALPHA)
         chart_surf.fill((0, 0, 0, 0))
 
-        pygame.draw.rect(chart_surf, TXT, (0, 0, w, h), 2)
+        pygame.draw.rect(chart_surf, chart_axis(), (0, 0, w, h), 2)
 
-        y_step = 200.0 if y_max_val >= 1000 else 50.0
+        y_step = nice_step(y_max_val, 5)
         y_range = y_max_val - y_min_val
         tick_labels = []
         if y_range > 0:
@@ -377,11 +381,11 @@ def draw_curve_chart(
                 if val >= y_min_val:
                     rel = (val - y_min_val) / y_range
                     y_px = h - rel * h
-                    pygame.draw.line(chart_surf, TXT, (0, int(y_px)), (5, int(y_px)), 1)
-                    lbl = rt(f_s, f"{val:.0f}", TXT)
+                    pygame.draw.line(chart_surf, chart_axis(), (0, int(y_px)), (5, int(y_px)), 1)
+                    lbl = rt(f_s, fmt_tick(val), chart_axis())
                     tick_labels.append((lbl, int(y_px)))
                     if abs(val) > 0.001:
-                        dash_surf = _get_dashed_h_surface(w, DASH_COLOR)
+                        dash_surf = _get_dashed_h_surface(w, chart_dash())
                         chart_surf.blit(dash_surf, (0, int(y_px)))
                 val += y_step
 
@@ -391,7 +395,7 @@ def draw_curve_chart(
         def mapper(xv, yv):
             rx = (xv - x_min) / (x_max - x_min) if x_max != x_min else 0
             ry = (yv - y_min_val) / y_range if y_range != 0 else 0
-            return rect.x + rx * w, rect.y + (h - ry * h)
+            return rx * w, h - ry * h
 
         pts = []
         for dt, ace in ace_curve_points:
@@ -404,8 +408,7 @@ def draw_curve_chart(
         curve_overlay = pygame.Surface((w, h), pygame.SRCALPHA)
         curve_overlay.fill((0, 0, 0, 0))
         if len(pts) > 1:
-            local_pts = [(px - rect.x, py - rect.y) for px, py in pts]
-            pygame.draw.lines(curve_overlay, CURVE_BLUE, False, local_pts, 2)
+            pygame.draw.lines(curve_overlay, CURVE_BLUE, False, pts, 2)
         cached['curve_overlay'] = curve_overlay
 
         if len(_curve_cache) >= _MAX_CACHE:
@@ -419,9 +422,412 @@ def draw_curve_chart(
 
     surface.blit(cached['curve_overlay'], rect.topleft)
 
+    # 悬停数值显示由十字线（_draw_crosshair）统一提供，此处不再返回提示
+    return None
+
+
+# ════════════════════ 多年度 ACE 柱状图 ════════════════════
+
+YEARLY_BAR_COLOR = (60, 140, 220)
+YEARLY_BAR_CURRENT = (220, 140, 40)
+
+_yearly_ace_cache: Dict[Tuple, dict] = {}
+_MAX_YEARLY_CACHE = 8
+
+
+def draw_yearly_ace_chart(
+    surface: pygame.Surface,
+    rect: pygame.Rect,
+    year_ace_pairs: List[Tuple[int, float]],
+    current_year: int = 0,
+) -> Optional[Tuple[str, Tuple[int, int]]]:
+    """年度 ACE 柱状图。横轴年份，纵轴 ACE 总量。"""
+    if not year_ace_pairs:
+        return None
+
+    key = (id(year_ace_pairs), rect.width, rect.height, current_year, chart_dark())
+    if key in _yearly_ace_cache:
+        cached = _yearly_ace_cache[key]
+    else:
+        w, h = rect.width, rect.height
+        max_ace = max(a for _, a in year_ace_pairs) if year_ace_pairs else 1.0
+        y_max = max_ace * 1.15
+        step = nice_step(y_max, 5)
+
+        chart_surf = pygame.Surface((w, h), pygame.SRCALPHA)
+        chart_surf.fill((0, 0, 0, 0))
+        pygame.draw.rect(chart_surf, chart_axis(), (0, 0, w, h), 2)
+
+        tick_labels = []
+        val = 0.0
+        while val <= y_max + step * 0.01:
+            rel = val / y_max
+            y_px = h - rel * h
+            lbl = rt(f_s, f"{val:.0f}" if val < 100 else fmt_tick(val), chart_axis())
+            tick_labels.append((lbl, int(y_px)))
+            if val > 0.001:
+                dash_surf = _get_dashed_h_surface(w, chart_dash())
+                chart_surf.blit(dash_surf, (0, int(y_px)))
+            val += step
+
+        n_years = len(year_ace_pairs)
+        bar_gap = max(6, w // (n_years * 4))
+        bar_w = (w - bar_gap * (n_years + 1)) / n_years
+        bar_info = []
+
+        for i, (year, ace) in enumerate(year_ace_pairs):
+            x_data = bar_gap + i * (bar_w + bar_gap)
+            rel_h = ace / y_max if y_max > 0 else 0
+            bar_h_val = max(1, rel_h * h)
+            y_px = h - bar_h_val
+            color = YEARLY_BAR_CURRENT if year == current_year else YEARLY_BAR_COLOR
+            br = pygame.Rect(int(x_data), int(y_px), max(1, int(bar_w)), int(bar_h_val))
+            pygame.draw.rect(chart_surf, color, br)
+            pygame.draw.rect(chart_surf, chart_axis(), br, 1)
+            bar_info.append((br, f"{year}: {ace:.4f}"))
+
+            # 年份标签（柱下）
+            yl = rt(f_s, str(year), chart_axis())
+            lx = int(x_data + bar_w / 2 - yl.get_width() / 2)
+            ly = h - yl.get_height() - 2
+            if ly > 0:
+                chart_surf.blit(yl, (lx, max(4, ly)))
+
+        for lbl, y_px in tick_labels:
+            pygame.draw.line(chart_surf, chart_axis(), (0, y_px), (4, y_px), 1)
+
+        cached = {
+            'chart_surf': chart_surf, 'tick_labels': tick_labels,
+            'bar_info': bar_info, 'bar_w': bar_w, 'bar_gap': bar_gap,
+        }
+        if len(_yearly_ace_cache) >= _MAX_YEARLY_CACHE:
+            _yearly_ace_cache.pop(next(iter(_yearly_ace_cache)))
+        _yearly_ace_cache[key] = cached
+
+    surface.blit(cached['chart_surf'], rect.topleft)
+    for lbl, y_px in cached['tick_labels']:
+        surface.blit(lbl, (rect.x - lbl.get_width() - 8, rect.y + y_px - lbl.get_height() // 2))
+
     mx, my = pygame.mouse.get_pos()
-    for i, (px, py) in enumerate(cached['pts']):
-        if abs(mx - px) + abs(my - py) < 10:
-            dt, ace = ace_curve_points[i]
-            return f"{dt.month}/{dt.day} {dt.hour:02d}Z: {ace:.4f}", (mx + 15, my - 25)
+    for br_local, hover_str in cached['bar_info']:
+        br_screen = br_local.move(rect.x, rect.y)
+        if br_screen.collidepoint(mx, my):
+            return hover_str, (mx + 15, my - 25)
+    return None
+
+
+# ════════════════════ 多年累积 ACE 曲线叠加 ════════════════════
+
+_MULTI_CURVE_COLORS = [
+    (30, 100, 220), (220, 60, 60), (0, 160, 80),
+    (220, 140, 0), (140, 60, 180), (0, 180, 180),
+    (220, 100, 50), (50, 200, 50), (0, 0, 200),
+    (200, 200, 20), (200, 20, 200), (20, 200, 200),
+    (100, 100, 255), (255, 100, 100), (100, 255, 100),
+]
+
+_multi_curve_cache: Dict[Tuple, dict] = {}
+
+
+def draw_multi_year_curve_chart(
+    surface: pygame.Surface,
+    rect: pygame.Rect,
+    curves: List[Tuple[int, List[Tuple[datetime, float]], float, Tuple[datetime, datetime, int]]],
+) -> Optional[Tuple[str, Tuple[int, int]]]:
+    """多条年度累积 ACE 曲线叠加。
+    curves = [(year, [(dt, ace), ...], total_ace, (start_dt, end_dt, total_hours)), ...]"""
+    if not curves:
+        return None
+
+    w, h = rect.width, rect.height
+    key = (id(curves), w, h, chart_dark())
+    cached = _multi_curve_cache.get(key)
+    if cached is None or cached.get('src') is not curves:
+        cached = {'src': curves}
+
+        all_max = max(max(p[1] for p in cv[1]) for cv in curves if cv[1])
+        y_max_val = all_max * 1.1
+        if y_max_val < 10:
+            y_max_val = 10.0
+
+        chart_surf = pygame.Surface((w, h), pygame.SRCALPHA)
+        chart_surf.fill((0, 0, 0, 0))
+        pygame.draw.rect(chart_surf, chart_axis(), (0, 0, w, h), 2)
+
+        y_step = nice_step(y_max_val, 5)
+        tick_labels = []
+        val = 0.0
+        while val <= y_max_val:
+            rel = val / y_max_val
+            y_px = h - rel * h
+            pygame.draw.line(chart_surf, chart_axis(), (0, int(y_px)), (5, int(y_px)), 1)
+            lbl = rt(f_s, f"{val:.0f}", chart_axis())
+            tick_labels.append((lbl, int(y_px)))
+            if val > 0.001:
+                dash_surf = _get_dashed_h_surface(w, chart_dash())
+                chart_surf.blit(dash_surf, (0, int(y_px)))
+            val += y_step
+
+        # 找到最长的时间跨度作为 x 轴基准
+        max_total_hours = max(cv[3][2] for cv in curves)
+        # 按日历对齐：所有曲线按统一日历来映射 x 坐标
+        global_start = min(cv[3][0] for cv in curves)
+
+        curve_overlays = []
+        legend_info = []
+
+        for ci, (year, pts, total_ace, (start_dt, end_dt, total_hours)) in enumerate(curves):
+            if not pts:
+                continue
+            color = _MULTI_CURVE_COLORS[ci % len(_MULTI_CURVE_COLORS)]
+
+            # 按日历对齐映射
+            local_pts = []
+            for dt, ace in pts:
+                ho = (dt - global_start).total_seconds() / 3600
+                x_px = (ho / max_total_hours) * w if max_total_hours > 0 else 0
+                rel_y = ace / y_max_val if y_max_val > 0 else 0
+                y_px = h - rel_y * h
+                local_pts.append((int(x_px), int(y_px)))
+
+            overlay = pygame.Surface((w, h), pygame.SRCALPHA)
+            overlay.fill((0, 0, 0, 0))
+            if len(local_pts) > 1:
+                pygame.draw.lines(overlay, color, False, local_pts, 2)
+            curve_overlays.append(overlay)
+
+            # 图例项
+            display_fmt = f"{total_ace:.0f}" if total_ace < 1000 else fmt_tick(total_ace)
+            legend_info.append((color, f"{year}: {display_fmt}"))
+
+        cached['chart_surf'] = chart_surf
+        cached['tick_labels'] = tick_labels
+        cached['curve_overlays'] = curve_overlays
+        cached['legend_info'] = legend_info
+        cached['curves'] = curves
+        cached['global_start'] = global_start
+        cached['max_total_hours'] = max_total_hours
+
+        if len(_multi_curve_cache) >= _MAX_CACHE:
+            _multi_curve_cache.pop(next(iter(_multi_curve_cache)))
+        _multi_curve_cache[key] = cached
+
+    surface.blit(cached['chart_surf'], rect.topleft)
+    for lbl, y_px in cached['tick_labels']:
+        surface.blit(lbl, (rect.x - lbl.get_width() - 10, rect.y + y_px - lbl.get_height() // 2))
+    for overlay in cached['curve_overlays']:
+        surface.blit(overlay, rect.topleft)
+
+    # 图例
+    ly = rect.bottom + 5
+    lx = rect.x + 8
+    for color, text in cached.get('legend_info', []):
+        ls = rt(f_s, text, chart_axis())
+        line_x = lx
+        pygame.draw.line(surface, color, (line_x, ly + ls.get_height() // 2),
+                         (line_x + 12, ly + ls.get_height() // 2), 2)
+        surface.blit(ls, (line_x + 16, ly))
+        lx += 16 + ls.get_width() + 20
+        if lx > rect.right - 60:
+            lx = rect.x + 8
+            ly += ls.get_height() + 4
+
+    # 月份线
+    global_start = cached['global_start']
+    max_th = cached['max_total_hours']
+    for m in range(13):
+        ms = datetime(global_start.year, m, 1, 0) if m >= 1 else global_start
+        if ms < global_start:
+            continue
+        ho = (ms - global_start).total_seconds() / 3600
+        if ho > max_th:
+            break
+        x_px = rect.x + (ho / max_th) * rect.width
+        draw_dashed_v(surface, x_px, rect.top, rect.bottom, chart_dash(), 4, 4)
+        ml = rt(f_s, f"{m:02d}/01" if m >= 1 else global_start.strftime("%m/%d"),
+                chart_axis())
+        surface.blit(ml, (x_px - ml.get_width() // 2, rect.bottom + 2))
+
+    mx, my = pygame.mouse.get_pos()
+    if rect.collidepoint(mx, my):
+        return f"鼠标悬停查看各年 ACE 曲线", (mx + 15, my - 25)
+    return None
+
+
+# ════════════════════ 月度统计柱状图 ════════════════════
+
+MONTH_NAMES = ['1月', '2月', '3月', '4月', '5月', '6月',
+               '7月', '8月', '9月', '10月', '11月', '12月']
+
+_monthly_cache: Dict[Tuple, dict] = {}
+
+
+def draw_monthly_bars_chart(
+    surface: pygame.Surface,
+    rect: pygame.Rect,
+    data: List[Tuple[int, float]],
+    bar_color: Tuple[int, int, int] = (60, 140, 220),
+    y_label: str = "",
+) -> Optional[Tuple[str, Tuple[int, int]]]:
+    """12 个月份的柱状图。data = [(month_index, value), ...]，1-12 索引。"""
+    filled = {m: v for m, v in data}
+    pairs = [(m, filled.get(m, 0)) for m in range(1, 13)]
+
+    w, h = rect.width, rect.height
+    key = (id(data), w, h, bar_color, chart_dark())
+    cached = _monthly_cache.get(key)
+    if cached is None or cached.get('src') is not data:
+        cached = {'src': data}
+        max_val = max(v for _, v in pairs) if pairs else 1.0
+        if max_val <= 0:
+            max_val = 1.0
+        y_max = max_val * 1.15
+        step = nice_step(y_max, 4)
+
+        chart_surf = pygame.Surface((w, h), pygame.SRCALPHA)
+        chart_surf.fill((0, 0, 0, 0))
+
+        tick_labels = []
+        val = 0.0
+        while val <= y_max + step * 0.01:
+            rel = val / y_max
+            y_px = h - rel * h
+            lbl = rt(f_s, f"{val:.0f}", chart_axis())
+            tick_labels.append((lbl, int(y_px)))
+            if val > 0.001:
+                dash_surf = _get_dashed_h_surface(w, chart_dash())
+                chart_surf.blit(dash_surf, (0, int(y_px)))
+                pygame.draw.line(chart_surf, chart_axis(), (0, int(y_px)), (4, int(y_px)), 1)
+            val += step
+
+        pygame.draw.rect(chart_surf, chart_axis(), (0, 0, w, h), 2)
+        pygame.draw.line(chart_surf, chart_axis(), (0, h), (w, h), 1)
+
+        n = 12
+        bar_gap = max(6, w // (n * 4))
+        bar_w = (w - bar_gap * (n + 1)) / n
+        bar_info = []
+
+        for i, (m, val) in enumerate(pairs):
+            x_data = bar_gap + i * (bar_w + bar_gap)
+            rel_h = val / y_max if y_max > 0 else 0
+            bar_h_val = max(1, rel_h * h)
+            y_px = h - bar_h_val
+            br = pygame.Rect(int(x_data), int(y_px), max(1, int(bar_w)), int(bar_h_val))
+            pygame.draw.rect(chart_surf, bar_color, br)
+            pygame.draw.rect(chart_surf, chart_axis(), br, 1)
+            bar_info.append((br, f"{MONTH_NAMES[i]}: {val:.0f}"))
+            ml = rt(f_s, str(m), chart_axis())
+            lx = int(x_data + bar_w / 2 - ml.get_width() / 2)
+            ly = h - ml.get_height() - 2
+            if ly > 0:
+                chart_surf.blit(ml, (lx, max(2, ly)))
+
+        cached['chart_surf'] = chart_surf
+        cached['tick_labels'] = tick_labels
+        cached['bar_info'] = bar_info
+        if len(_monthly_cache) >= _MAX_CACHE:
+            _monthly_cache.pop(next(iter(_monthly_cache)))
+        _monthly_cache[key] = cached
+
+    surface.blit(cached['chart_surf'], rect.topleft)
+    for lbl, y_px in cached['tick_labels']:
+        surface.blit(lbl, (rect.x - lbl.get_width() - 8, rect.y + y_px - lbl.get_height() // 2))
+
+    # 单位标签
+    if y_label:
+        yl = rt(f_s, y_label, chart_axis())
+        surface.blit(yl, (rect.x + 5, rect.y + 2))
+
+    mx, my = pygame.mouse.get_pos()
+    for br_local, hover_str in cached['bar_info']:
+        br_screen = br_local.move(rect.x, rect.y)
+        if br_screen.collidepoint(mx, my):
+            return hover_str, (mx + 15, my - 25)
+    return None
+
+
+# ════════════════════ 洋区统计对比图 ════════════════════
+
+_basin_cache: Dict[Tuple, dict] = {}
+
+
+def draw_basin_comparison_chart(
+    surface: pygame.Surface,
+    rect: pygame.Rect,
+    basin_data: List[Tuple[str, float, Tuple[int, int, int]]],
+) -> Optional[Tuple[str, Tuple[int, int]]]:
+    """洋区 ACE 对比柱状图。basin_data = [(name, value, color), ...]"""
+    if not basin_data:
+        return None
+
+    w, h = rect.width, rect.height
+    key = (id(basin_data), w, h, chart_dark())
+    cached = _basin_cache.get(key)
+    if cached is None or cached.get('src') is not basin_data:
+        cached = {'src': basin_data}
+        max_val = max(v for _, v, _ in basin_data)
+        if max_val <= 0:
+            max_val = 1.0
+        y_max = max_val * 1.15
+        step = nice_step(y_max, 5)
+
+        chart_surf = pygame.Surface((w, h), pygame.SRCALPHA)
+        chart_surf.fill((0, 0, 0, 0))
+
+        tick_labels = []
+        val = 0.0
+        while val <= y_max + step * 0.01:
+            rel = val / y_max
+            y_px = h - rel * h
+            lbl = rt(f_s, fmt_tick(val), chart_axis())
+            tick_labels.append((lbl, int(y_px)))
+            if val > 0.001:
+                dash_surf = _get_dashed_h_surface(w, chart_dash())
+                chart_surf.blit(dash_surf, (0, int(y_px)))
+            val += step
+
+        pygame.draw.rect(chart_surf, chart_axis(), (0, 0, w, h), 2)
+
+        n = len(basin_data)
+        bar_gap = max(10, w // (n * 4))
+        bar_w = (w - bar_gap * (n + 1)) / n
+        bar_info = []
+
+        for i, (name, val, color) in enumerate(basin_data):
+            x_data = bar_gap + i * (bar_w + bar_gap)
+            rel_h = val / y_max if y_max > 0 else 0
+            bar_h_val = max(1, rel_h * h)
+            y_px = h - bar_h_val
+            br = pygame.Rect(int(x_data), int(y_px), max(1, int(bar_w)), int(bar_h_val))
+            pygame.draw.rect(chart_surf, color, br)
+            pygame.draw.rect(chart_surf, chart_axis(), br, 1)
+            bar_info.append((br, f"{name}: {val:.4f}"))
+
+            # 名称标签（柱下，竖排）
+            nl = rt(f_s, name, chart_axis())
+            nx = int(x_data + bar_w / 2 - nl.get_width() / 2)
+            ny = h - nl.get_height() - 2
+            if ny > 0:
+                chart_surf.blit(nl, (nx, max(2, ny)))
+
+        for lbl, y_px in tick_labels:
+            pygame.draw.line(chart_surf, chart_axis(), (0, y_px), (4, y_px), 1)
+
+        cached['chart_surf'] = chart_surf
+        cached['tick_labels'] = tick_labels
+        cached['bar_info'] = bar_info
+        if len(_basin_cache) >= _MAX_CACHE:
+            _basin_cache.pop(next(iter(_basin_cache)))
+        _basin_cache[key] = cached
+
+    surface.blit(cached['chart_surf'], rect.topleft)
+    for lbl, y_px in cached['tick_labels']:
+        surface.blit(lbl, (rect.x - lbl.get_width() - 8, rect.y + y_px - lbl.get_height() // 2))
+
+    mx, my = pygame.mouse.get_pos()
+    for br_local, hover_str in cached['bar_info']:
+        br_screen = br_local.move(rect.x, rect.y)
+        if br_screen.collidepoint(mx, my):
+            return hover_str, (mx + 15, my - 25)
     return None

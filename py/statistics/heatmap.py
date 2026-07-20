@@ -7,8 +7,10 @@ import pygame
 from PIL import Image as PILImage
 from typing import Optional
 
-from ..constants import f_s, f_m, rt, TXT, DIALOG_TITLE_BAR_HEIGHT, SUCAI_DIR, SETTINGS_TEXT_DIM
+from ..constants import (f_s, f_m, rt, TXT, DIALOG_TITLE_BAR_HEIGHT, SUCAI_DIR,
+                         SETTINGS_TEXT_DIM, SETTINGS_TEXT_LIGHT)
 from ..dialog_base import DraggableDialog
+from .chart_helpers import render_map_subset
 
 
 # ── ace-heat.png 色表加载 ──
@@ -62,6 +64,8 @@ class PathHeatmapDialog(DraggableDialog):
         self._custom_active = False
         self._custom_fields = []
         self._custom_field_active = -1
+        self._legend_cache: dict = {}
+        self._title_cache: Optional[tuple] = None
 
     def activate(self):
         super().activate()
@@ -131,22 +135,7 @@ class PathHeatmapDialog(DraggableDialog):
         surf = pygame.Surface((w, new_h), pygame.SRCALPHA)
 
         # ── 底图 ──
-        try:
-            orig = self.sim.map_mgr.map_view.original_img
-            iw, ih = orig.get_size()
-            ix1 = int((mlon - 0) / 360 * iw)
-            ix2 = int((Mlon - 0) / 360 * iw)
-            iy1 = int((90 - Mlat) / 180 * ih)
-            iy2 = int((90 - mlat) / 180 * ih)
-            ix1, ix2 = max(0, min(ix1, iw)), max(0, min(ix2, iw))
-            iy1, iy2 = max(0, min(iy1, ih)), max(0, min(iy2, ih))
-            if ix2 > ix1 and iy2 > iy1:
-                sub = orig.subsurface(pygame.Rect(ix1, iy1, ix2 - ix1, iy2 - iy1))
-                scaled = pygame.transform.smoothscale(sub, (bw, bh))
-                scaled.set_alpha(200)
-                surf.blit(scaled, (bx, by))
-        except Exception:
-            pass
+        render_map_subset(surf, self.sim, mlon, Mlon, mlat, Mlat, bx, by, bw, bh)
 
         # ── Phase 3: 径向累积 ACE 热力 ──
         radius_px = 2.0 / (Mlat - mlat) * bh   # 2° 纬距 → 像素
@@ -189,40 +178,37 @@ class PathHeatmapDialog(DraggableDialog):
         self._cached_surf = surf
 
     def _draw_legend(self, surface):
-        """在左侧空白区域绘制颜色渐变图例"""
-        bx, by = self.bg_rect.x, self.bg_rect.y
-        # 图例放在左侧边距区
-        legend_x = bx + 20
-        legend_y = by + 60
-        legend_w = 24
-        legend_h = 200
-
-        # 渐变条
-        for py in range(legend_h):
-            t = 1.0 - py / legend_h
-            value = t * 8.0
-            rgba = _ace_heat_color(value)
-            color = pygame.Color(*rgba)
-            pygame.draw.line(surface, color,
-                           (legend_x, legend_y + py),
-                           (legend_x + legend_w, legend_y + py))
-
-        pygame.draw.rect(surface, TXT,
-                        (legend_x, legend_y, legend_w, legend_h), 1)
-        # 标签
-        for val_pct in [0, 0.25, 0.5, 0.75, 1.0]:
-            y = legend_y + int((1.0 - val_pct) * legend_h)
-            value = val_pct * 8.0
-            lbl = rt(f_s, f"{value:.0f}", TXT)
-            surface.blit(lbl, (legend_x + legend_w + 6, y - lbl.get_height() // 2))
-        # 标题
-        title_lbl = rt(f_s, "ACE", TXT)
-        surface.blit(title_lbl, (legend_x, legend_y - 20))
+        """在左侧空白区域绘制颜色渐变图例（整体缓存为 Surface）。"""
+        dark = self.dark_mode
+        legend = self._legend_cache.get(dark)
+        if legend is None:
+            legend_w, legend_h = 24, 200
+            tc = SETTINGS_TEXT_LIGHT if dark else TXT
+            legend = pygame.Surface((legend_w + 40, legend_h + 30), pygame.SRCALPHA)
+            title_lbl = rt(f_s, "ACE", tc)
+            legend.blit(title_lbl, (0, 0))
+            gy = 20
+            for py in range(legend_h):
+                t = 1.0 - py / legend_h
+                rgba = _ace_heat_color(t * 8.0)
+                pygame.draw.line(legend, pygame.Color(*rgba),
+                                 (0, gy + py), (legend_w, gy + py))
+            pygame.draw.rect(legend, tc, (0, gy, legend_w, legend_h), 1)
+            for val_pct in (0, 0.25, 0.5, 0.75, 1.0):
+                y = gy + int((1.0 - val_pct) * legend_h)
+                lbl = rt(f_s, f"{val_pct * 8.0:.0f}", tc)
+                legend.blit(lbl, (legend_w + 6, y - lbl.get_height() // 2))
+            self._legend_cache[dark] = legend
+        surface.blit(legend, (self.bg_rect.x + 20, self.bg_rect.y + 40))
 
     def draw(self, surface: pygame.Surface):
         if not self.active:
             return
-        self.draw_background(surface, self.bg_rect)
+        dark = self.dark_mode
+        if dark:
+            self.draw_dark_panel(surface, self.bg_rect)
+        else:
+            self.draw_background(surface, self.bg_rect)
         self._render()
         if self._cached_surf:
             surface.blit(self._cached_surf, self.bg_rect.topleft)
@@ -231,8 +217,12 @@ class PathHeatmapDialog(DraggableDialog):
 
         bx, by = self.bg_rect.x, self.bg_rect.y
         bw = self.bg_rect.width
-        title = rt(f_m, f"路径密度热力图 - {self._year}", TXT)
-        surface.blit(title, (bx + 12, by + 8))
+        tc = SETTINGS_TEXT_LIGHT if dark else TXT
+        title_key = (self._year, dark)
+        if self._title_cache is None or self._title_cache[0] != title_key:
+            self._title_cache = (title_key,
+                                 rt(f_m, f"路径密度热力图 - {self._year}", tc))
+        surface.blit(self._title_cache[1], (bx + 12, by + 8))
 
         # 右上角范围模式切换（记录按钮位置供 handle_event 检测）
         self._mode_btns = []
@@ -241,23 +231,26 @@ class PathHeatmapDialog(DraggableDialog):
             r = pygame.Rect(bx + bw - 280 + i * 85, by + 6, 75, 22)
             self._mode_btns.append(r)
             is_on = self._range_mode == i
-            if not self.dark_mode:
+            if not dark:
                 bg = (100, 150, 200) if is_on else (180, 190, 210)
-                tc = (255, 255, 255)
+                btc = (255, 255, 255)
             elif is_on:
                 bg = (70, 130, 180)
-                tc = (20, 25, 35)
+                btc = (20, 25, 35)
             else:
                 bg = (50, 55, 70)
-                tc = SETTINGS_TEXT_DIM
+                btc = SETTINGS_TEXT_DIM
             pygame.draw.rect(surface, bg, r, border_radius=6)
-            ts = rt(f_s, name, tc)
+            ts = rt(f_s, name, btc)
             surface.blit(ts, (r.x + (r.w - ts.get_width()) // 2, r.y + (r.h - ts.get_height()) // 2))
 
         # 关闭按钮
         cb = pygame.Rect(bx + bw - 90, by + 8, 55, 25)
         self._close_btn_rect = cb
-        self.draw_button(surface, cb, rt(f_s, "关闭", (255, 255, 255)))
+        if dark:
+            self.draw_dark_button(surface, cb, "关闭")
+        else:
+            self.draw_button(surface, cb, rt(f_s, "关闭", (255, 255, 255)))
 
         # 自定义范围输入
         if self._range_mode == self.RANGE_CUSTOM:
@@ -265,13 +258,15 @@ class PathHeatmapDialog(DraggableDialog):
             labels = ["西", "东", "南", "北"]
             vals = [f"{self._custom_mlon:.0f}", f"{self._custom_Mlon:.0f}",
                     f"{self._custom_mlat:.0f}", f"{self._custom_Mlat:.0f}"]
+            field_bg = (40, 44, 55) if dark else (255, 255, 255)
+            field_border = (80, 110, 160) if dark else (100, 150, 200)
             for i, (lbl, val) in enumerate(zip(labels, vals)):
                 lx = bx + bw - 280 + i * 68
-                surface.blit(rt(f_s, lbl, TXT), (lx, cy))
+                surface.blit(rt(f_s, lbl, tc), (lx, cy))
                 fr = pygame.Rect(lx + 16, cy, 46, 22)
-                pygame.draw.rect(surface, (255, 255, 255), fr, 0, 3)
-                pygame.draw.rect(surface, (100, 150, 200), fr, 1, 3)
-                vs = rt(f_s, val, TXT)
+                pygame.draw.rect(surface, field_bg, fr, 0, 3)
+                pygame.draw.rect(surface, field_border, fr, 1, 3)
+                vs = rt(f_s, val, tc)
                 surface.blit(vs, (fr.x + 3, fr.y + 3))
 
     def handle_event(self, e: pygame.event.Event) -> bool:

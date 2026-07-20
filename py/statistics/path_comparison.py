@@ -5,9 +5,10 @@ import pygame
 from typing import List, Optional, Tuple, Set
 
 from ..constants import (f_s, f_m, rt, TXT, BUTTON_BORDER,
-                          DIALOG_TITLE_BAR_HEIGHT)
+                          DIALOG_TITLE_BAR_HEIGHT, SETTINGS_TEXT_LIGHT)
 from ..dialog_base import DraggableDialog
 from .shared import COLORS
+from .chart_helpers import build_basin_order, render_map_subset, draw_vscrollbar
 
 
 # ── 侧栏常量 ──
@@ -42,6 +43,15 @@ class PathComparisonDialog(DraggableDialog):
         self._box_selecting = False
         self._box_start = (0, 0)
         self._box_current = (0, 0)
+        # 绘制缓存
+        self._name_surfs: List[pygame.Surface] = []
+        self._title_cache: Optional[tuple] = None
+        self._sidebar_bg_cache: Optional[tuple] = None
+        self._box_surf: Optional[pygame.Surface] = None
+        self._close_text = rt(f_s, "关闭", (255, 255, 255))
+        self._select_all_text = rt(f_s, "全选", (255, 255, 255))
+        self._deselect_all_text = rt(f_s, "全不选", (255, 255, 255))
+        self._intensity_cmp_text = rt(f_s, "强度对比", (255, 255, 255))
 
     def activate(self):
         super().activate()
@@ -71,6 +81,10 @@ class PathComparisonDialog(DraggableDialog):
         all_tys.sort(key=_sort_key)
         self._tys = all_tys
         self._selected = set(range(len(self._tys)))  # 默认全选
+        self._name_surfs = [
+            rt(f_s, self.sim.get_display_name(ty), COLORS[i % len(COLORS)])
+            for i, ty in enumerate(self._tys)
+        ]
 
         # 初始化布局（尽可能利用屏幕空间）
         w = min(1800, max(1200, self.sim.screen_width - 40))
@@ -82,10 +96,7 @@ class PathComparisonDialog(DraggableDialog):
         self._checkbox_rects = []
 
     def _build_basin_order(self) -> dict:
-        areas = getattr(getattr(self.sim, 'res_mgr', None), 'ocean_areas', None)
-        if areas and areas.areas:
-            return {a.code: i for i, a in enumerate(areas.areas)}
-        return {}
+        return build_basin_order(self.sim)
 
     def _render(self):
         if self._cached_surf is not None:
@@ -130,22 +141,8 @@ class PathComparisonDialog(DraggableDialog):
         surf = pygame.Surface((w, new_h), pygame.SRCALPHA)
 
         # ── 底图 ──
-        try:
-            orig = self.sim.map_mgr.map_view.original_img
-            iw, ih = orig.get_size()
-            ix1 = int((mlon - 0) / 360 * iw)
-            ix2 = int((Mlon - 0) / 360 * iw)
-            iy1 = int((90 - Mlat) / 180 * ih)
-            iy2 = int((90 - mlat) / 180 * ih)
-            ix1, ix2 = max(0, min(ix1, iw)), max(0, min(ix2, iw))
-            iy1, iy2 = max(0, min(iy1, ih)), max(0, min(iy2, ih))
-            if ix2 > ix1 and iy2 > iy1:
-                sub = orig.subsurface(pygame.Rect(ix1, iy1, ix2 - ix1, iy2 - iy1))
-                scaled = pygame.transform.smoothscale(sub, (box_w, box_h))
-                scaled.set_alpha(200)
-                surf.blit(scaled, (box_x, box_y))
-        except Exception:
-            pass
+        render_map_subset(surf, self.sim, mlon, Mlon, mlat, Mlat,
+                          box_x, box_y, box_w, box_h)
 
         # ── Phase 3: 坐标映射与路径绘制 ──
         def geo_to_local(lon, lat):
@@ -185,7 +182,11 @@ class PathComparisonDialog(DraggableDialog):
     def draw(self, surface: pygame.Surface):
         if not self.active:
             return
-        self.draw_background(surface, self.bg_rect)
+        dark = self.dark_mode
+        if dark:
+            self.draw_dark_panel(surface, self.bg_rect)
+        else:
+            self.draw_background(surface, self.bg_rect)
         self._render()
         if self._cached_surf:
             surface.blit(self._cached_surf, self.bg_rect.topleft)
@@ -194,14 +195,20 @@ class PathComparisonDialog(DraggableDialog):
         box_w = self.bg_rect.width
         box_h = self.bg_rect.height
 
-        # 标题
-        title = rt(f_m, f"路径对比 — {self._year}", TXT)
-        surface.blit(title, (box_x + 12, box_y + 8))
+        # 标题（缓存）
+        title_key = (self._year, dark)
+        if self._title_cache is None or self._title_cache[0] != title_key:
+            tc = SETTINGS_TEXT_LIGHT if dark else TXT
+            self._title_cache = (title_key, rt(f_m, f"路径对比 — {self._year}", tc))
+        surface.blit(self._title_cache[1], (box_x + 12, box_y + 8))
 
         # 关闭按钮
         cb = pygame.Rect(box_x + box_w - 90, box_y + 8, 55, 25)
         self._close_btn_rect = cb
-        self.draw_button(surface, cb, rt(f_s, "关闭", (255, 255, 255)))
+        if dark:
+            self.draw_dark_button(surface, cb, "关闭")
+        else:
+            self.draw_button(surface, cb, self._close_text)
 
         # ══ 右侧选择栏 ══
         self._draw_sidebar(surface, box_x, box_y, box_w, box_h)
@@ -212,24 +219,34 @@ class PathComparisonDialog(DraggableDialog):
             ry = min(self._box_start[1], self._box_current[1])
             rw = abs(self._box_current[0] - self._box_start[0])
             rh = abs(self._box_current[1] - self._box_start[1])
-            box_surf = pygame.Surface((rw, rh), pygame.SRCALPHA)
-            box_surf.fill((100, 180, 255, 60))
-            pygame.draw.rect(box_surf, (100, 180, 255), (0, 0, rw, rh), 1)
-            surface.blit(box_surf, (rx, ry))
+            if rw > 0 and rh > 0:
+                if self._box_surf is None or self._box_surf.get_size() != (rw, rh):
+                    self._box_surf = pygame.Surface((rw, rh), pygame.SRCALPHA)
+                    self._box_surf.fill((100, 180, 255, 60))
+                    pygame.draw.rect(self._box_surf, (100, 180, 255), (0, 0, rw, rh), 1)
+                surface.blit(self._box_surf, (rx, ry))
 
     def _draw_sidebar(self, surface, box_x, box_y, box_w, box_h):
         """绘制右侧选择栏"""
+        dark = self.dark_mode
 
         sx = box_x + box_w - SIDEBAR_WIDTH - 10
         sy = box_y + 40
         sh = box_h - 80
         self._sidebar_rect = pygame.Rect(sx, sy, SIDEBAR_WIDTH, sh)
 
-        # 侧栏背景
-        sidebar_bg = pygame.Surface((SIDEBAR_WIDTH, sh), pygame.SRCALPHA)
-        sidebar_bg.fill((230, 235, 245, 180))
-        pygame.draw.rect(sidebar_bg, BUTTON_BORDER, (0, 0, SIDEBAR_WIDTH, sh), 1, 6)
-        surface.blit(sidebar_bg, (sx, sy))
+        # 侧栏背景（缓存）
+        bg_key = (sh, dark)
+        if self._sidebar_bg_cache is None or self._sidebar_bg_cache[0] != bg_key:
+            sidebar_bg = pygame.Surface((SIDEBAR_WIDTH, sh), pygame.SRCALPHA)
+            if dark:
+                sidebar_bg.fill((35, 40, 52, 220))
+                pygame.draw.rect(sidebar_bg, (70, 80, 100), (0, 0, SIDEBAR_WIDTH, sh), 1, 6)
+            else:
+                sidebar_bg.fill((230, 235, 245, 180))
+                pygame.draw.rect(sidebar_bg, BUTTON_BORDER, (0, 0, SIDEBAR_WIDTH, sh), 1, 6)
+            self._sidebar_bg_cache = (bg_key, sidebar_bg)
+        surface.blit(self._sidebar_bg_cache[1], (sx, sy))
 
         # 内容区域
         content_x = sx + 8
@@ -240,10 +257,16 @@ class PathComparisonDialog(DraggableDialog):
         btn_w, btn_h = 55, 22
         self._select_all_btn = pygame.Rect(content_x, content_top, btn_w, btn_h)
         self._deselect_all_btn = pygame.Rect(content_x + btn_w + 8, content_top, btn_w, btn_h)
-        self.draw_button(surface, self._select_all_btn, rt(f_s, "全选", (255, 255, 255)),
-                         style='primary' if len(self._selected) == len(self._tys) else 'light')
-        self.draw_button(surface, self._deselect_all_btn, rt(f_s, "全不选", (255, 255, 255)),
-                         style='primary' if len(self._selected) == 0 else 'light')
+        if dark:
+            self.draw_dark_button(surface, self._select_all_btn, "全选",
+                                  hover=len(self._selected) == len(self._tys))
+            self.draw_dark_button(surface, self._deselect_all_btn, "全不选",
+                                  hover=len(self._selected) == 0)
+        else:
+            self.draw_button(surface, self._select_all_btn, self._select_all_text,
+                             style='primary' if len(self._selected) == len(self._tys) else 'light')
+            self.draw_button(surface, self._deselect_all_btn, self._deselect_all_text,
+                             style='primary' if len(self._selected) == 0 else 'light')
 
         # 复选框列表
         list_top = content_top + btn_h + 10
@@ -257,11 +280,12 @@ class PathComparisonDialog(DraggableDialog):
         max_scroll = max(0, total - visible_rows)
         self._sidebar_scroll = max(0, min(self._sidebar_scroll, max_scroll))
 
+        cb_unsel_bg = (55, 60, 75) if dark else (180, 190, 200)
+        cb_unsel_border = (90, 100, 120) if dark else BUTTON_BORDER
+
         self._checkbox_rects = []
         for i in range(self._sidebar_scroll, min(self._sidebar_scroll + visible_rows, total)):
             row_y = list_top + (i - self._sidebar_scroll) * ROW_HEIGHT
-            ty = self._tys[i]
-            name = self.sim.get_display_name(ty)
 
             # 复选框
             cb_rect = pygame.Rect(content_x, row_y + 3, CHECKBOX_SIZE, CHECKBOX_SIZE)
@@ -278,36 +302,28 @@ class PathComparisonDialog(DraggableDialog):
                                  (cb_rect.centerx, cb_rect.bottom - 2),
                                  (cb_rect.right - 1, cb_rect.top + 3), 2)
             else:
-                pygame.draw.rect(surface, (180, 190, 200), cb_rect, 0, 2)
-                pygame.draw.rect(surface, BUTTON_BORDER, cb_rect, 1, 2)
+                pygame.draw.rect(surface, cb_unsel_bg, cb_rect, 0, 2)
+                pygame.draw.rect(surface, cb_unsel_border, cb_rect, 1, 2)
 
-            # 名称（用台风对应颜色）
-            color_idx = i % len(COLORS)
-            txt = rt(f_s, name, COLORS[color_idx])
-            surface.blit(txt, (cb_rect.right + 6, row_y + 1))
+            # 名称（用台风对应颜色，预渲染缓存）
+            if i < len(self._name_surfs):
+                surface.blit(self._name_surfs[i], (cb_rect.right + 6, row_y + 1))
 
         # 侧栏滚动条
-        if total > visible_rows:
-            self._draw_sidebar_scrollbar(surface, content_x + content_w - 8,
-                                         list_top, list_h, total, visible_rows)
+        draw_vscrollbar(surface, content_x + content_w - 8, list_top, list_h,
+                        total, visible_rows, self._sidebar_scroll,
+                        dark=dark, show_track=True)
 
         # ── 强度对比按钮 ──
         cmp_btn_y = sy + sh - 30
         self._intensity_cmp_btn = pygame.Rect(content_x, cmp_btn_y, content_w, 24)
-        self.draw_button(surface, self._intensity_cmp_btn,
-                        rt(f_s, "强度对比", (255, 255, 255)),
-                        style='primary' if len(self._selected) >= 1 else 'light')
-
-    def _draw_sidebar_scrollbar(self, surface, track_x, track_top, track_h,
-                                 total, visible):
-        track_rect = pygame.Rect(track_x, track_top, 6, track_h)
-        pygame.draw.rect(surface, (200, 210, 220), track_rect, 0, 3)
-        thumb_h = max(16, track_h * visible / total)
-        avail = track_h - thumb_h
-        ratio = self._sidebar_scroll / (total - visible) if total > visible else 0
-        thumb_y = track_top + int(ratio * avail)
-        pygame.draw.rect(surface, (120, 150, 190),
-                         (track_x, thumb_y, 6, thumb_h), 0, 3)
+        if dark:
+            self.draw_dark_button(surface, self._intensity_cmp_btn, "强度对比",
+                                  hover=len(self._selected) >= 1)
+        else:
+            self.draw_button(surface, self._intensity_cmp_btn,
+                             self._intensity_cmp_text,
+                             style='primary' if len(self._selected) >= 1 else 'light')
 
     # ═══════════════════════════════════════════════
     #  事件

@@ -22,6 +22,15 @@ class TySimKeyboardMixin:
         self.repo.reload_typhoons()
         self.cti = self.repo.cti
         self.edit_typhoon = self.repo.edit_typhoon
+
+        # 清空所有持有旧 Typhoon 对象引用的缓存，防止泄漏
+        self._info_box_cache_typhoon.clear()
+        self._info_box_last_data.clear()
+        self._season_info_box_cache.clear()
+        self._season_info_box_last_data.clear()
+        if hasattr(self, 'playback_ctrl'):
+            self.playback_ctrl._was_fin.clear()
+            self.playback_ctrl._lf_last.clear()
         if self.md == self.MODE_EDIT and self.tys:
             self.edit_typhoon = self.tys[0]
 
@@ -261,6 +270,8 @@ class TySimKeyboardMixin:
             self._cached_season_csa = self.csa
             self._has_season_cache = True
 
+        # 编辑模式的点阵显示由渲染层强制（_line_mode），无需改动配置
+
         if self.md == self.MODE_NORMAL:
             self.md = self.MODE_SEASON
         elif self.md == self.MODE_SEASON:
@@ -274,6 +285,7 @@ class TySimKeyboardMixin:
         self.po = 0
         self._cancel_drag()
         self._sync_land_state()
+        self._invalidate_all_path_caches()
 
         if self.md == self.MODE_SEASON:
             if self._has_season_cache and self._cached_season_st is not None:
@@ -295,6 +307,9 @@ class TySimKeyboardMixin:
                 self.csa = self.calc_accumulated_ace_up_to(
                     self.sy, int(self.st[0:2]), int(self.st[2:4]), int(self.st[4:6]))
             self._sync_to_season_ctrl()
+            # 按当前风季时间对齐台风状态：已结束的跳过、进行中的定位到当前时刻、未开始的等待
+            self.season_ctrl.jump_to(self._season_dt())
+            self._sync_season_state()
         elif self.md == self.MODE_EDIT:
             if not self.edit_typhoon and self.tys:
                 self.edit_typhoon = self.tys[0]

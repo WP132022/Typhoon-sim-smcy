@@ -9,6 +9,7 @@ from .constants import (
     f_s, f_m, rt, TXT, LIST_HL, BUTTON_BORDER, BUTTON_DISABLED,
     POINT_LIST_ROWS_PER_PAGE, POINT_LIST_WIDTH, POINT_LIST_ROW_HEIGHT, POINT_LIST_HEADER_Y,
     DIALOG_TITLE_BAR_HEIGHT,
+    SETTINGS_TEXT_LIGHT, SETTINGS_TEXT_DIM,
 )
 from .input_field import InputField
 from .dialog_base import DraggableDialog
@@ -32,11 +33,27 @@ class PointList(DraggableDialog):
 
         self.headers = ["时间", "纬度", "经度", "强度", "气压", "类型", "正式报"]
         self.col_widths = [180, 80, 80, 50, 50, 60, 60]
-        self.header_surfs = [rt(f_s, h, TXT) for h in self.headers]
+        tc_d = SETTINGS_TEXT_LIGHT
+        tc_l = TXT
+        self.header_surfs = [rt(f_s, h, tc_l) for h in self.headers]
+        self.header_surfs_dark = [rt(f_s, h, tc_d) for h in self.headers]
 
         self.title_bar_height = DIALOG_TITLE_BAR_HEIGHT
         self._row_cache = {}
         self._row_hashes = {}
+
+        # 按钮文字缓存（不再每帧 rt()）
+        W = (255, 255, 255)
+        self._btn_texts = {
+            'undo': rt(f_s, "撤销", W), 'redo': rt(f_s, "重做", W),
+            'edit': rt(f_s, "编辑", W), 'delete': rt(f_s, "删除", W),
+            'insert_before': rt(f_s, "前插", W),
+            'insert_after': rt(f_s, "后插", W),
+            'append': rt(f_s, "新增", W),
+        }
+        self._jump_text = rt(f_s, "跳页", W)
+        self._confirm_text = rt(f_s, "确认", W)
+        self._cancel_text = rt(f_s, "取消", W)
 
     # ── 激活/关闭 ──
 
@@ -69,14 +86,16 @@ class PointList(DraggableDialog):
         self._row_cache.clear()
         self._row_hashes.clear()
 
-    def _get_row_data(self, pt: TrackPoint):
-        """返回 (hash_str, {header: surface})。"""
+    def _get_row_data(self, pt: TrackPoint, dark: bool = False):
+        """返回 (hash_str, {header: surface, header_dark?: surface})。"""
         cols = [
             pt['t'], lat_to_display(pt['la']), lon_to_display(pt['lo']),
             str(pt['w']), str(pt['p']) if pt['p'] else '', pt['st'],
             "是" if pt.get('official', True) else "否",
         ]
-        return "|".join(cols), {h: rt(f_s, cols[i], TXT) for i, h in enumerate(self.headers)}
+        tc = SETTINGS_TEXT_LIGHT if dark else TXT
+        return "|".join(cols) + f"|dark={dark}", {
+            h: rt(f_s, cols[i], tc) for i, h in enumerate(self.headers)}
 
     # ── 布局 ──
 
@@ -193,7 +212,8 @@ class PointList(DraggableDialog):
     def _jump_event(self, e):
         if self.jump_field is None:
             r = pygame.Rect(self.bg_rect.centerx - 100, self.bg_rect.centery - 20, 200, 40)
-            self.jump_field = InputField(r, max_length=3, validator=str.isdigit)
+            self.jump_field = InputField(r, max_length=3, validator=str.isdigit,
+                                         dark=self.dark_mode)
             self.jump_field.activate()
         elif self.jump_field.handle_event(e):
             return True
@@ -405,12 +425,21 @@ class PointList(DraggableDialog):
                 self.deactivate()
             return
 
+        dark = self.dark_mode
+        tc = SETTINGS_TEXT_LIGHT if dark else TXT
+        hl_color = (255, 255, 255, 25) if dark else LIST_HL
         lx, ly, lw, lh = self.bg_rect
-        self.draw_background(surface, self.bg_rect)
-        surface.blit(rt(f_m, f"报点列表 - {self.sim.get_display_name(self.typhoon)}", TXT), (lx + 20, ly + 15))
 
+        if dark:
+            self.draw_dark_panel(surface, self.bg_rect)
+        else:
+            self.draw_background(surface, self.bg_rect)
+        surface.blit(rt(f_m, f"报点列表 - {self.sim.get_display_name(self.typhoon)}", tc),
+                     (lx + 20, ly + 15))
+
+        headers = self.header_surfs_dark if dark else self.header_surfs
         hx = lx + 20
-        for i, surf in enumerate(self.header_surfs):
+        for i, surf in enumerate(headers):
             surface.blit(surf, (hx, ly + POINT_LIST_HEADER_Y))
             hx += self.col_widths[i]
 
@@ -420,12 +449,12 @@ class PointList(DraggableDialog):
             row = i - start
             y = ly + 75 + row * POINT_LIST_ROW_HEIGHT
             if i == self.selected_index:
-                pygame.draw.rect(surface, LIST_HL, (lx + 5, y - 2, lw - 10, 28))
+                pygame.draw.rect(surface, hl_color, (lx + 5, y - 2, lw - 10, 28))
             pt = self.typhoon.pts[i]
-            dh = self._get_row_data(pt)[0]
+            dh = self._get_row_data(pt, dark)[0]
             h = self._row_hashes.get(i)
             if h is None or h != dh:
-                self._row_cache[i] = self._get_row_data(pt)[1]
+                self._row_cache[i] = self._get_row_data(pt, dark)[1]
                 self._row_hashes[i] = dh
             cx = lx + 20
             for j, header in enumerate(self.headers):
@@ -433,28 +462,33 @@ class PointList(DraggableDialog):
                 cx += self.col_widths[j]
 
         page_info = f"第 {self.current_page + 1}/{self.get_total_pages()} 页  共 {len(self.typhoon.pts)} 条"
-        surface.blit(rt(f_s, page_info, TXT), (lx + 20, ly + lh - 30))
+        surface.blit(rt(f_s, page_info, tc), (lx + 20, ly + lh - 30))
 
-        self.draw_button(surface, self._jump_btn(), rt(f_s, "跳页", (255, 255, 255)), BUTTON_BORDER)
+        if dark:
+            self.draw_dark_button(surface, self._jump_btn(), self._jump_text)
+        else:
+            self.draw_button(surface, self._jump_btn(), self._jump_text, BUTTON_BORDER)
         if not self.readonly:
             btns = self._action_buttons()
-            texts = {'undo': rt(f_s, "撤销", (255, 255, 255)), 'redo': rt(f_s, "重做", (255, 255, 255)),
-                     'edit': rt(f_s, "编辑", (255, 255, 255)), 'delete': rt(f_s, "删除", (255, 255, 255)),
-                     'insert_before': rt(f_s, "前插", (255, 255, 255)),
-                     'insert_after': rt(f_s, "后插", (255, 255, 255)),
-                     'append': rt(f_s, "新增", (255, 255, 255))}
             for label, rect in btns.items():
-                self.draw_button(surface, rect, texts[label], BUTTON_BORDER)
+                if dark:
+                    self.draw_dark_button(surface, rect, self._btn_texts[label])
+                else:
+                    self.draw_button(surface, rect, self._btn_texts[label], BUTTON_BORDER)
 
         if self.jump_active and self.jump_field:
             ov = pygame.Surface((lw + 40, lh + 40), pygame.SRCALPHA)
-            ov.fill((0, 0, 0, 100))
+            ov.fill((0, 0, 0, 120))
             surface.blit(ov, (lx - 20, ly - 20))
             self.jump_field.draw(surface)
-            surface.blit(rt(f_s, f"输入页码 (1-{self.get_total_pages()}):", TXT),
+            surface.blit(rt(f_s, f"输入页码 (1-{self.get_total_pages()}):", tc),
                          (self.jump_field.rect.x, self.jump_field.rect.y - 25))
             confirm = pygame.Rect(self.jump_field.rect.x + 20, self.jump_field.rect.y + 50, 60, 30)
             cancel = pygame.Rect(self.jump_field.rect.x + 120, self.jump_field.rect.y + 50, 60, 30)
-            self.draw_button(surface, confirm, rt(f_s, "确认", (255, 255, 255)), BUTTON_BORDER)
-            self.draw_button(surface, cancel, rt(f_s, "取消", (255, 255, 255)), BUTTON_DISABLED)
+            if dark:
+                self.draw_dark_button(surface, confirm, self._confirm_text)
+                self.draw_dark_button(surface, cancel, self._cancel_text)
+            else:
+                self.draw_button(surface, confirm, self._confirm_text, BUTTON_BORDER)
+                self.draw_button(surface, cancel, self._cancel_text, BUTTON_DISABLED)
             self.jump_confirm_btn, self.jump_cancel_btn = confirm, cancel

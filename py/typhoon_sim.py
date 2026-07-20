@@ -105,8 +105,9 @@ class TyphoonSimMixin:
         cur_dt = self.points_time[ci + 1] - self.points_time[ci]
         prev_dt = self.points_time[ci] - self.points_time[ci - 1] if ci > 0 else cur_dt
         next_dt = self.points_time[ci + 2] - self.points_time[ci + 1] if ci + 1 < n - 1 else cur_dt
-        s_prev = (prev_len / prev_dt) / (cur_len / cur_dt) if cur_dt > 0 and prev_dt > 0 else 1.0
-        s_next = (next_len / next_dt) / (cur_len / cur_dt) if cur_dt > 0 and next_dt > 0 else 1.0
+        cur_rate = cur_len / cur_dt if cur_dt > 0 else 0.0
+        s_prev = (prev_len / prev_dt) / cur_rate if prev_dt > 0 and cur_rate > 0 else 1.0
+        s_next = (next_len / next_dt) / cur_rate if next_dt > 0 and cur_rate > 0 else 1.0
         v0 = max(0.1, min(3.0, (1.0 + s_prev) / 2.0))
         v1 = max(0.1, min(3.0, (1.0 + s_next) / 2.0))
         t2 = t * t
@@ -192,6 +193,8 @@ class TyphoonSimMixin:
         v.ipos = None
         v.last_on_land = False
         v.icon_alpha = v.path_alpha = 255
+        v._last_ri_at = -999.0
+        v._ri_armed = True
         v._img_cache.clear()
         if self.pts:
             self.recalc_simulated_times()

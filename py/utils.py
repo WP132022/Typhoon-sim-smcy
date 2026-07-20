@@ -2,6 +2,7 @@
 """工具函数。"""
 from __future__ import annotations
 
+import functools
 import os
 import json
 import logging
@@ -23,6 +24,7 @@ def load_window_size() -> Tuple[int, int]:
         return _DEFAULT_W, _DEFAULT_H
 
 
+@functools.lru_cache(maxsize=128)
 def find_insensitive_path(base_path: str) -> Optional[str]:
     if os.path.exists(base_path):
         return base_path
@@ -36,8 +38,25 @@ def find_insensitive_path(base_path: str) -> Optional[str]:
                 return os.path.join(directory, f)
     return None
 
-
 fip = find_insensitive_path
+
+
+def play_sound(sound, volume=None) -> None:
+    """可靠地播放音效：声道全忙时强制抢占最久的声道，避免静默失败。"""
+    if sound is None:
+        return
+    try:
+        import pygame
+        if volume is not None:
+            sound.set_volume(volume)
+        ch = sound.play()
+        if ch is None:
+            ch = pygame.mixer.find_channel(True)
+            if ch is not None:
+                ch.play(sound)
+    except Exception:
+        pass
+
 
 _NON_TROPICAL_TYPES = frozenset({'MD', 'SS', 'SD', 'EX', 'LO'})
 _EXCLUDED_TYPES = frozenset({'MD', 'SS', 'SD', 'EX', 'LO', 'DB'})
@@ -99,6 +118,14 @@ def infer_strength_category(wind: int, stype: str) -> str:
     if wind < _WIND_C5_MIN:
         return "C4-ST"
     return "C5"
+
+
+_DISPLAY_CAT = {'C2-': 'C2', 'C3-': 'C3'}
+
+
+def display_category(cat: str) -> str:
+    """显示用等级名：C2-/C3- 显示为 C2/C3。"""
+    return _DISPLAY_CAT.get(cat, cat)
 
 
 def darken_color(c: Tuple[int, ...], factor: float = 0.6) -> Tuple[int, ...]:

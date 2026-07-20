@@ -1,6 +1,7 @@
 # py/ty_sim_mixins/_draw_icon_mixin.py
 """台风图标 + 名称 + 信息框渲染 Mixin。"""
 from __future__ import annotations
+import numpy as np
 import pygame
 from ..typhoon import TrackPoint
 from ..constants import (
@@ -13,7 +14,7 @@ from ..constants import (
 )
 from ..smcy_icon import get_smcy_manager, _FRAME_INTERVAL_MS, _TOTAL_FRAMES
 from ..constants.fonts import _load_font, SmartFont, FONT_FILE
-from ..utils import get_tropical_points, max_wind_from_points
+from ..utils import get_tropical_points, max_wind_from_points, display_category
 from ..ace_engine import _ace_eligible
 
 _box_font = SmartFont(_load_font(FONT_FILE, 28, 28), _load_font(FONT_FILE, 28, 28))
@@ -21,6 +22,41 @@ _name_font = SmartFont(_load_font(FONT_FILE, 28, 28), _load_font(FONT_FILE, 28, 
 _peak_font = SmartFont(_load_font(FONT_FILE, 19, 19), _load_font(FONT_FILE, 19, 19))
 
 _OUTLINE8 = [(-1, -1), (-1, 0), (-1, 1), (0, -1), (0, 1), (1, -1), (1, 0), (1, 1)]
+
+
+# ── 155+/170+ 紫色滤镜与辉光 ──
+
+_PURPLE_TIERS = (
+    # (最低风速, 滤镜强度)
+    (170, 0.85),   # 170+: 更紫
+    (155, 0.45),   # 155+: 偏紫
+)
+
+
+def _purple_tier(wind: int):
+    for tier in _PURPLE_TIERS:
+        if wind >= tier[0]:
+            return tier
+    return None
+
+
+def _apply_purple_filter(surf: pygame.Surface, strength: float) -> pygame.Surface:
+    """按像素饱和度把彩色部分推向紫色；白/灰(低饱和)部分不受影响。
+
+    C5 图标主色为品红 (255,0,255)，"更紫"意味着压低红色通道
+    （C5_M=191,0,255 → C5_D=128,0,255），同时压绿提蓝。"""
+    out = surf.copy()
+    px = pygame.surfarray.pixels3d(out)
+    arr = px.astype(np.float32)
+    mx = arr.max(axis=2)
+    mn = arr.min(axis=2)
+    f = (mx - mn) / 255.0 * strength           # 白色 sat=0 → 不变
+    arr[..., 0] *= (1.0 - 0.50 * f)                            # 压红 → 紫罗兰
+    arr[..., 1] *= (1.0 - 0.55 * f)                            # 压绿
+    arr[..., 2] += (255.0 - arr[..., 2]) * 0.50 * f            # 提蓝
+    px[...] = np.clip(arr, 0, 255).astype(np.uint8)
+    del px
+    return out
 
 
 class TySimDrawIconMixin:
@@ -88,6 +124,12 @@ class TySimDrawIconMixin:
                     progress = 1.0 if ty.ci >= len(ty.pts) - 1 else 0.0
                 icon_alpha = max(0, int(255 * (1.0 - progress)))
 
+        # 刚生成时的渐入效果（生成后 800ms 内 alpha 从 0 线性至 255）
+        if ty.v._spawn_time:
+            elapsed = pygame.time.get_ticks() - ty.v._spawn_time
+            if elapsed < 800:
+                icon_alpha = icon_alpha * min(255, int(elapsed * 255 / 800)) // 255
+
         if show_icon and icon_alpha > 0:
             cat = cp.get('cat', self.get_strength_category(cp['w'], cp['st']))
             trans = self._get_transition(ty)
@@ -102,11 +144,11 @@ class TySimDrawIconMixin:
                     new_final = (icon_alpha * new_a) // 255
                     f = ty.v._smcy_frame
                     if old_final > 0:
-                        self._draw_smcy_frame(surface, ty, old_cat, f, x, y, icon_factor, old_final)
+                        self._draw_smcy_frame(surface, ty, old_cat, f, x, y, icon_factor, old_final, cp['w'])
                     if new_final > 0:
-                        self._draw_smcy_frame(surface, ty, new_cat, f, x, y, icon_factor, new_final)
+                        self._draw_smcy_frame(surface, ty, new_cat, f, x, y, icon_factor, new_final, cp['w'])
                 else:
-                    self._draw_smcy_frame(surface, ty, cat, ty.v._smcy_frame, x, y, icon_factor, icon_alpha)
+                    self._draw_smcy_frame(surface, ty, cat, ty.v._smcy_frame, x, y, icon_factor, icon_alpha, cp['w'])
             else:
                 if trans:
                     old_cat, old_a, new_cat, new_a = trans
@@ -181,24 +223,25 @@ class TySimDrawIconMixin:
             return
 
         orig_w, orig_h = ring_img.get_size()
-        target_size = max(20, int(70 * icon_factor))
+        target_size = max(20, int(70 * icon_factor * (1.5 if cat == 'EX' else 1.0)))
         scale = min(target_size / orig_w, target_size / orig_h)
         new_w, new_h = max(1, int(orig_w * scale)), max(1, int(orig_h * scale))
         base_ring = self._get_scaled_image(ring_img, new_w, new_h, cat, self._ring_scale_cache)
         total_rotation = ty.ra + ty.sa
-        rotated_ring = ty.get_rotated_ring((cat, new_w, new_h), base_ring, total_rotation, ty.mirror)
 
+        # tint 并入旋转缓存（避免每帧 tint_image 新建 Surface）
+        tint_color = None
         if cat == "C5":
             tint_color = self._get_c5_color(cp['w'])
-            rotated_ring = self.tint_image(rotated_ring, tint_color)
         elif cat in ("C2-", "C3-", "C4-ST"):
             tint_color = self._get_sub_gradient_color(cp['w'], cat)
-            if tint_color:
-                rotated_ring = self.tint_image(rotated_ring, tint_color)
         elif cat == "MD":
-            rotated_ring = self.tint_image(rotated_ring, MD_COLOR)
+            tint_color = MD_COLOR
         elif cat == "STS":
-            rotated_ring = self.tint_image(rotated_ring, STS)
+            tint_color = STS
+        rotated_ring = ty.get_rotated_ring(
+            (cat, new_w, new_h), base_ring, total_rotation, ty.mirror,
+            tuple(tint_color[:3]) if tint_color else None)
 
         if icon_alpha < 255:
             rotated_ring = rotated_ring.copy()
@@ -242,7 +285,6 @@ class TySimDrawIconMixin:
                     l3_angle = ty.sa4
                 else:
                     l3_angle = ty.sa5
-                l3_rotated = ty.get_rotated_level3_ring((level3_key, l3_w, l3_h), l3_base, l3_angle, ty.mirror)
                 if cat == "C5":
                     l3_color = self._get_c5_color(cp['w'])
                 elif cat in ("C3-", "C4-ST"):
@@ -253,8 +295,11 @@ class TySimDrawIconMixin:
                     l3_color = C4
                 else:
                     l3_color = self.get_point_color(cp['w'], cp['st'])
-                l3_rotated = self.tint_image(l3_rotated, l3_color)
+                l3_rotated = ty.get_rotated_level3_ring(
+                    (level3_key, l3_w, l3_h), l3_base, l3_angle, ty.mirror,
+                    tuple(l3_color[:3]))
                 if icon_alpha < 255:
+                    l3_rotated = l3_rotated.copy()
                     l3_rotated.set_alpha(icon_alpha)
                 l3_rect = l3_rotated.get_rect(center=(x, y))
                 surface.blit(l3_rotated, l3_rect)
@@ -279,18 +324,38 @@ class TySimDrawIconMixin:
                 v._smcy_frame = (v._smcy_frame + advance) % _TOTAL_FRAMES
                 v._smcy_last_ticks = now - (elapsed % interval)
 
-    def _draw_smcy_frame(self, surface, ty, cat, frame_idx, x, y, icon_factor, icon_alpha):
+    # ── 紫滤镜结果缓存：避免每帧对 C5 图标做 numpy 全图运算 ──
+    _purple_frame_cache: dict = {}
+    _PURPLE_FRAME_CACHE_MAX = 120
+
+    def _draw_smcy_frame(self, surface, ty, cat, frame_idx, x, y, icon_factor, icon_alpha,
+                         wind: int = 0):
         """纯绘制指定帧，按视频原始宽高比缩放。"""
         hemi = HEMISPHERE_SOUTH if ty.v.mirror else HEMISPHERE_NORTH
         mgr = get_smcy_manager()
         orig = mgr.get_size(cat, hemi) or (400, 400)
-        size_mult = 2.0 if cat == 'EX' else 1.5
+        size_mult = 3.0 if cat == 'EX' else 1.5   # EX 特殊处理：放大 1.5 倍
         target = max(20, int(70 * icon_factor * size_mult))
         scale = min(target / orig[0], target / orig[1])
         ts = (max(1, int(orig[0] * scale)), max(1, int(orig[1] * scale)))
-        frame = get_smcy_manager().get_frame(cat, hemi, frame_idx, ts)
-        if frame is None:
-            return
+        # 155+/170+ 紫色滤镜（不影响白色部分），结果按帧缓存
+        tier = _purple_tier(wind) if cat == 'C5' else None
+        if tier is not None:
+            key = (cat, hemi, frame_idx, ts, tier[1])
+            cache = TySimDrawIconMixin._purple_frame_cache
+            frame = cache.get(key)
+            if frame is None:
+                raw = get_smcy_manager().get_frame(cat, hemi, frame_idx, ts)
+                if raw is None:
+                    return
+                frame = _apply_purple_filter(raw, tier[1])
+                if len(cache) >= self._PURPLE_FRAME_CACHE_MAX:
+                    cache.pop(next(iter(cache)))
+                cache[key] = frame
+        else:
+            frame = get_smcy_manager().get_frame(cat, hemi, frame_idx, ts)
+            if frame is None:
+                return
         frame.set_alpha(icon_alpha)
         rect = frame.get_rect(center=(x, y))
         surface.blit(frame, rect)
@@ -391,8 +456,14 @@ class TySimDrawIconMixin:
         pa, pb = a['p'], b['p']
         return bool(pa and pb and pa < pb)
 
+    @classmethod
+    def _pt_tied(cls, a, b) -> bool:
+        """两报强度持平（互相都不严格更强）。"""
+        return not cls._pt_stronger(a, b) and not cls._pt_stronger(b, a)
+
     def _get_peaks(self, ty) -> list:
-        """巅峰列表：风速高于前后两个合格报（可计算 ACE 的报 + 性质与风速合格的非正式报）。"""
+        """巅峰列表：风速高于前后两个合格报（可计算 ACE 的报 + 性质与风速合格的非正式报）。
+        平顶（连续持平报）取第一报：向后跳过持平报后再与首个不同强度的报比较。"""
         cached = getattr(ty, '_cached_peaks', None)
         if cached is not None:
             return cached
@@ -401,7 +472,11 @@ class TySimDrawIconMixin:
         for k, (i, p) in enumerate(qual):
             if k > 0 and not self._pt_stronger(p, qual[k - 1][1]):
                 continue
-            if k + 1 < len(qual) and not self._pt_stronger(p, qual[k + 1][1]):
+            # 跳过与当前持平的后续报（平顶），与平顶后的首个不同强度报比较
+            m = k + 1
+            while m < len(qual) and self._pt_tied(p, qual[m][1]):
+                m += 1
+            if m < len(qual) and not self._pt_stronger(p, qual[m][1]):
                 continue
             color = p.get('color', None) or self.get_point_color(p['w'], p['st'])
             peaks.append({'idx': i, 'w': p['w'], 'p': p['p'] or 0,
@@ -428,6 +503,8 @@ class TySimDrawIconMixin:
                 nh = max(1, int(surf.get_height() * name_factor))
                 surf = pygame.transform.smoothscale(surf, (nw, nh))
             self._name_shadow_cache[key] = surf
+            if len(self._name_shadow_cache) > 256:
+                self._name_shadow_cache.pop(next(iter(self._name_shadow_cache)))
         return surf
 
     _FADE_RAMP = 0.25       # 名称淡入/切换时长（points_time 单位，0.25 = 3 模拟小时）
@@ -461,6 +538,8 @@ class TySimDrawIconMixin:
                 nh = max(1, int(surf.get_height() * name_factor))
                 surf = pygame.transform.smoothscale(surf, (nw, nh))
             self._name_shadow_cache[key] = surf
+            if len(self._name_shadow_cache) > 256:
+                self._name_shadow_cache.pop(next(iter(self._name_shadow_cache)))
         return surf
 
     def draw_typhoon_name(self, surface: pygame.Surface, ty, x: int, y: int,
@@ -516,6 +595,7 @@ class TySimDrawIconMixin:
         peaks = self._get_peaks(ty)
         if peaks and pt:
             sp = max(0.1, getattr(self, 'sp', 1.0))
+            pk_factor = getattr(self, 'peak_label_size', 100) / 100.0
             total = len(peaks)
             py_pos = ty_pos + shadow_surf.get_height() - 1
             for n, pk in enumerate(peaks, 1):
@@ -535,32 +615,46 @@ class TySimDrawIconMixin:
                 label = f"{prefix} {pk['w']}kt"
                 if pk['p']:
                     label += f" {pk['p']}mb"
-                surf_pk = self._get_peak_label_surf(label, pk['color'], name_factor)
+                surf_pk = self._get_peak_label_surf(label, pk['color'], pk_factor)
                 self._blit_faded(surface, surf_pk, (text_x - 1, py_pos), pk_alpha)
                 py_pos += surf_pk.get_height() - 2
 
     # ── 信息框 ──
     def _draw_info_box(self, surface: pygame.Surface, ty, point: TrackPoint) -> None:
+        dark = getattr(self, 'dark_mode', True)
         key_data = (
             ty.b, ty.n, ty.cust, ty.sname, ty.start_time, point['t'],
             point['la'], point['lo'], point['w'], point['p'], point['st'],
-            ty.tace, ty.cace, self.name_display_mode
+            ty.tace, self.name_display_mode, dark
         )
         if ty in self._info_box_cache_typhoon and self._info_box_last_data.get(ty) == key_data:
-            box = self._info_box_cache_typhoon[ty]
+            box, ace_x, ace_y, ace_tc = self._info_box_cache_typhoon[ty]
         else:
             ifs, ifm = f_name, _box_font
 
+            if dark:
+                box_bg = (22, 28, 44, 220)
+                box_border = (55, 85, 130)
+                tc = (215, 225, 245)
+                off_ok = (90, 210, 120)
+                off_no = (235, 110, 110)
+            else:
+                box_bg = INFO_BOX_BG
+                box_border = INFO_BOX_BORDER
+                tc = TXT
+                off_ok = (0, 150, 0)
+                off_no = (150, 0, 0)
+
             box_w, box_h = 375, 390
             bg = pygame.Surface((box_w, box_h), pygame.SRCALPHA)
-            pygame.draw.rect(bg, INFO_BOX_BG, (0, 0, box_w, box_h), 0, 15)
-            pygame.draw.rect(bg, INFO_BOX_BORDER, (0, 0, box_w, box_h), 2, 15)
+            pygame.draw.rect(bg, box_bg, (0, 0, box_w, box_h), 0, 15)
+            pygame.draw.rect(bg, box_border, (0, 0, box_w, box_h), 2, 15)
 
             y = 15
             max_w = box_w - 30
 
             # ── 第1行：台风标签 ──
-            label_surf = rt(ifs, "台风:", TXT, max_w)
+            label_surf = rt(ifs, "台风:", tc, max_w)
             bg.blit(label_surf, (15, y))
             y += label_surf.get_height() + 3
 
@@ -576,12 +670,12 @@ class TySimDrawIconMixin:
                     display_name = f"{start_year} {base_name}"
             else:
                 display_name = self.get_display_name(ty)
-            name_surf = rt(ifm, display_name, TXT, max_w)
+            name_surf = rt(ifm, display_name, tc, max_w)
             bg.blit(name_surf, (15, y))
             y += name_surf.get_height() + 6
 
             # ── 后续行 ──
-            time_surf = rt(ifs, f"时间: {point['t']}", TXT, max_w)
+            time_surf = rt(ifs, f"时间: {point['t']}", tc, max_w)
             bg.blit(time_surf, (15, y)); y += time_surf.get_height() + 3
 
             la = point['la']
@@ -600,40 +694,45 @@ class TySimDrawIconMixin:
             else:
                 lon_disp = lo
                 lon_dir = 'E'
-            pos_surf = rt(ifs, f"位置: {lat_val:.1f}°{lat_dir}, {lon_disp:.1f}°{lon_dir}", TXT, max_w)
+            pos_surf = rt(ifs, f"位置: {lat_val:.1f}°{lat_dir}, {lon_disp:.1f}°{lon_dir}", tc, max_w)
             bg.blit(pos_surf, (15, y)); y += pos_surf.get_height() + 3
 
             st = point['st'].upper()
             if st in ('EX', 'MD', 'SS', 'SD', 'LO', 'DB'):
-                wind_surf = rt(ifs, f"风速: {point['w']} kt  性质: {st}", TXT, max_w)
+                wind_surf = rt(ifs, f"风速: {point['w']} kt  性质: {st}", tc, max_w)
             else:
-                wind_surf = rt(ifs, f"风速: {point['w']} kt", TXT, max_w)
+                wind_surf = rt(ifs, f"风速: {point['w']} kt", tc, max_w)
             bg.blit(wind_surf, (15, y)); y += wind_surf.get_height() + 3
 
             pres_str = f"气压: {point['p']} hPa" if point['p'] != 0 else "气压: 未知"
-            pres_surf = rt(ifs, pres_str, TXT, max_w)
+            pres_surf = rt(ifs, pres_str, tc, max_w)
             bg.blit(pres_surf, (15, y)); y += pres_surf.get_height() + 3
 
             cat = point.get('cat', self.get_strength_category(point['w'], point['st']))
-            cat_surf = rt(ifs, f"等级: {cat}", TXT, max_w)
+            cat_surf = rt(ifs, f"等级: {display_category(cat)}", tc, max_w)
             bg.blit(cat_surf, (15, y)); y += cat_surf.get_height() + 3
 
             off_text = "正式报" if point.get('official', True) else "非正式报"
-            off_color = (0, 150, 0) if point.get('official', True) else (150, 0, 0)
+            off_color = off_ok if point.get('official', True) else off_no
             off_surf = rt(ifs, f"报别: {off_text}", off_color, max_w)
             bg.blit(off_surf, (15, y)); y += off_surf.get_height() + 3
 
-            ace_total = rt(ifs, f"总ACE: {ty.tace:.4f}", TXT, max_w)
+            ace_total = rt(ifs, f"总ACE: {ty.tace:.4f}", tc, max_w)
             bg.blit(ace_total, (15, y)); y += ace_total.get_height() + 3
-            ace_curr = rt(ifs, f"实时ACE: {ty.cace:.4f}", TXT, max_w)
-            bg.blit(ace_curr, (15, y)); y += ace_curr.get_height() + 3
+            ace_prefix = rt(ifs, "实时ACE: ", tc, max_w)
+            bg.blit(ace_prefix, (15, y))
+            ace_x, ace_y, ace_tc = 15 + ace_prefix.get_width(), y, tc
+            y += ace_prefix.get_height() + 3
 
             max_wind = max_wind_from_points(ty.pts)
-            peak_surf = rt(ifs, f"巅峰: {max_wind} kt", TXT, max_w)
+            peak_surf = rt(ifs, f"巅峰: {max_wind} kt", tc, max_w)
             bg.blit(peak_surf, (15, y))
 
-            self._info_box_cache_typhoon[ty] = bg
+            self._info_box_cache_typhoon[ty] = (bg, ace_x, ace_y, ace_tc)
             self._info_box_last_data[ty] = key_data
             box = bg
 
         surface.blit(box, (22, 22))
+        # 实时ACE数字每帧单独绘制（ASCII，底层字体绕过 SmartFont 缓存）
+        digits = f_name.en_font.render(f"{ty.cace:.4f}", True, ace_tc)
+        surface.blit(digits, (22 + ace_x, 22 + ace_y))

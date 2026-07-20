@@ -9,12 +9,19 @@ from typing import Optional, Callable, Tuple, Union
 logger = logging.getLogger(__name__)
 
 class InputField:
+    """文本输入框，支持暗色主题。
+
+    dark=False (默认) → 白色底色 + 黑色文字
+    dark=True → 暗色底色 + 浅色文字 + 暗色高亮 + 暗色光标
+    """
+
     def __init__(self,
                  rect: Union[pygame.Rect, Tuple[int, int, int, int]],
                  label: str = "",
                  max_length: int = 30,
                  validator: Optional[Callable[[str], bool]] = None,
-                 font=f_s):
+                 font=f_s,
+                 dark: bool = False):
         self.rect = pygame.Rect(rect)
         self.label = label
         self.text = ""
@@ -23,6 +30,7 @@ class InputField:
         self.max_length = max_length
         self.validator = validator
         self.font = font
+        self.dark = dark
         self.selection_start: Optional[int] = None
         self.selection_end: Optional[int] = None
         self.dragging = False
@@ -248,12 +256,19 @@ class InputField:
         if self.active and self._bs_held:
             self._handle_bs_accel()
 
+        d = self.dark
+        bg = (40, 44, 55) if d else (255, 255, 255)
+        border_active = (80, 110, 160) if d else BUTTON_BORDER
+        border_inactive = (60, 65, 78) if d else (150, 150, 150)
+        tc = (220, 220, 240) if d else TXT
+        hl = (80, 120, 200, 80) if d else (70, 130, 180, 100)
+
         if self.label:
-            label_surf = self.font.render(self.label, True, TXT)
+            label_surf = self.font.render(self.label, True, tc)
             surface.blit(label_surf, (self.rect.x, self.rect.y - 20))
 
-        pygame.draw.rect(surface, (255, 255, 255), self.rect, 0, 3)
-        border_color = BUTTON_BORDER if self.active else (150, 150, 150)
+        pygame.draw.rect(surface, bg, self.rect, 0, 3)
+        border_color = border_active if self.active else border_inactive
         pygame.draw.rect(surface, border_color, self.rect, 1, 3)
 
         text_x = self.rect.x + 5
@@ -267,17 +282,18 @@ class InputField:
                     x_end = text_x + self.font.size(self.text[:end])[0]
                     highlight_rect = pygame.Rect(x_start, text_y, x_end - x_start, self.rect.height - 10)
                     s = pygame.Surface(highlight_rect.size, pygame.SRCALPHA)
-                    s.fill((70, 130, 180, 100))
+                    s.fill(hl)
                     surface.blit(s, highlight_rect)
 
-            text_surf = self.font.render(self.text, True, TXT)
+            text_surf = self.font.render(self.text, True, tc)
             surface.blit(text_surf, (text_x, text_y))
 
         if self.active and (pygame.time.get_ticks() % 1000 < 500):
             cursor_x = text_x + self.font.size(self.text[:self.cursor_pos])[0]
             cursor_y_top = text_y
             cursor_y_bottom = self.rect.y + self.rect.height - 5
-            pygame.draw.line(surface, TXT, (cursor_x, cursor_y_top), (cursor_x, cursor_y_bottom), 2)
+            cursor_c = (220, 220, 240) if d else TXT
+            pygame.draw.line(surface, cursor_c, (cursor_x, cursor_y_top), (cursor_x, cursor_y_bottom), 2)
 
     def get_text(self) -> str:
         return self.text
@@ -290,6 +306,12 @@ class InputField:
     def activate(self):
         self.active = True
         self.cursor_pos = len(self.text)
+        self.selection_start = self.selection_end = None
+
+    def activate_at(self, x: int):
+        """激活并把光标定位到点击的 x 坐标处。"""
+        self.active = True
+        self.cursor_pos = self._get_index_at_pos(x)
         self.selection_start = self.selection_end = None
 
     def deactivate(self):

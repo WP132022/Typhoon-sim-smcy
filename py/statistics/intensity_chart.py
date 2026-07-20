@@ -6,12 +6,13 @@ from datetime import datetime, timedelta
 from typing import List, Tuple, Optional
 
 from ..constants import (
-    f_s, f_m, f_l, rt, TXT, BUTTON_BORDER, BUTTON_BG, DIALOG_TITLE_BAR_HEIGHT,
-    DB, TD, TS, C1, C2, C3, C4, C5_L, C5_M, C5_D, C2_MINUS, C3_MINUS, C4_ST,
+    f_s, f_l, rt, TXT, BUTTON_BORDER, BUTTON_BG,
+    SETTINGS_DARK_BG, SETTINGS_TEXT_LIGHT,
 )
 from ..dialog_base import DraggableDialog
-from .chart_helpers import DASH_COLOR, draw_dashed_h, draw_dashed_v
-from .shared import _THRESHOLDS
+from .chart_helpers import (DASH_COLOR, draw_dashed_h, draw_dashed_v,
+                            draw_fill_bands, draw_tooltip, draw_vscrollbar)
+from .shared import _THRESHOLDS, _FILL_BANDS
 
 # ── 固定深蓝色（模式 2） ──
 DARK_BLUE = (20, 60, 140)
@@ -20,28 +21,18 @@ DARK_BLUE = (20, 60, 140)
 ACE_CURVE_COLOR = (220, 130, 30)      # 橙金色
 ACE_CURVE_LINE_W = 2
 
-# 填充区域：(y_lower, y_upper, color)
-_FILL_BANDS: List[Tuple[float, float, Tuple[int, int, int]]] = [
-    (0,   29,  DB),
-    (29,  34,  TD),
-    (34,  64,  TS),
-    (64,  83,  C1),
-    (83,  86,  C2_MINUS),
-    (86,  96,  C2),
-    (96,  105, C3_MINUS),
-    (105, 113, C3),
-    (113, 130, C4),
-    (130, 137, C4_ST),
-    (137, 155, C5_L),
-    (155, 170, C5_M),
-    (170, 999, C5_D),
-]
-
 _CHART_COLORS = {
     'BG': (255, 255, 255, 235),
     'BORDER': TXT,
     'GRID_Y': (150, 150, 170, 140),
     'GRID_X': DASH_COLOR,
+}
+
+_CHART_COLORS_DARK = {
+    'BG': SETTINGS_DARK_BG,
+    'BORDER': (208, 216, 234),
+    'GRID_Y': (255, 255, 255, 60),
+    'GRID_X': (255, 255, 255, 55),
 }
 
 
@@ -115,6 +106,13 @@ class IntensityChartDialog(DraggableDialog):
         pts = ty.pts
         count = len(pts)
 
+        dark = self.dark_mode
+        self._built_dark = dark
+        C = _CHART_COLORS_DARK if dark else _CHART_COLORS
+        tc = SETTINGS_TEXT_LIGHT if dark else TXT
+        btn_bg = (50, 55, 70) if dark else BUTTON_BG
+        btn_border = (80, 110, 160) if dark else BUTTON_BORDER
+
         # 保存旧位置，_build 可能在事件处理中被调用来重建缓存，
         # 此时 bg_rect 应保持用户拖拽后的位置不变
         old_x, old_y = self.bg_rect.x, self.bg_rect.y
@@ -162,12 +160,12 @@ class IntensityChartDialog(DraggableDialog):
         # ── 预渲染 Surface（使用内容高度而非窗口高度）──
         ch = self._content_h
         surf = pygame.Surface((w, ch), pygame.SRCALPHA)
-        pygame.draw.rect(surf, _CHART_COLORS['BG'], (0, 0, w, ch), 0, 10)
-        pygame.draw.rect(surf, _CHART_COLORS['BORDER'], (0, 0, w, ch), 2, 10)
+        pygame.draw.rect(surf, C['BG'], (0, 0, w, ch), 0, 10)
+        pygame.draw.rect(surf, C['BORDER'], (0, 0, w, ch), 2, 10)
 
         # 标题
         name = self.sim.get_display_name(ty)
-        title = rt(f_l, f"{name} — 详情", TXT)
+        title = rt(f_l, f"{name} — 详情", tc)
         surf.blit(title, ((w - title.get_width()) // 2, 12))
 
         # ── 颜色模式切换按钮 ──
@@ -179,8 +177,8 @@ class IntensityChartDialog(DraggableDialog):
         btn_x = w - self._margin_r - btn_w
         btn_y = 10
         self._color_btn_rect = pygame.Rect(btn_x, btn_y, btn_w, btn_h)
-        pygame.draw.rect(surf, BUTTON_BG, self._color_btn_rect, 0, 4)
-        pygame.draw.rect(surf, BUTTON_BORDER, self._color_btn_rect, 1, 4)
+        pygame.draw.rect(surf, btn_bg, self._color_btn_rect, 0, 4)
+        pygame.draw.rect(surf, btn_border, self._color_btn_rect, 1, 4)
         surf.blit(btn_text, (btn_x + btn_pad, btn_y + 3))
 
         # ── ACE 曲线开关按钮 ──
@@ -189,33 +187,21 @@ class IntensityChartDialog(DraggableDialog):
         ace_btn_w = ace_btn_text.get_width() + btn_pad * 2
         ace_btn_x = btn_x - ace_btn_w - 8
         self._ace_btn_rect = pygame.Rect(ace_btn_x, btn_y, ace_btn_w, btn_h)
-        pygame.draw.rect(surf, BUTTON_BG, self._ace_btn_rect, 0, 4)
-        pygame.draw.rect(surf, BUTTON_BORDER, self._ace_btn_rect, 1, 4)
+        pygame.draw.rect(surf, btn_bg, self._ace_btn_rect, 0, 4)
+        pygame.draw.rect(surf, btn_border, self._ace_btn_rect, 1, 4)
         surf.blit(ace_btn_text, (ace_btn_x + btn_pad, btn_y + 3))
 
         # ── 填充区域 ──
-        for y_lower, y_upper, color in _FILL_BANDS:
-            if y_lower >= y_max:
-                continue
-            y_upper_clamped = min(y_upper, y_max)
-            if y_upper_clamped <= y_lower:
-                continue
-            rel_top = (y_upper_clamped - y_min) / (y_max - y_min)
-            rel_bottom = (y_lower - y_min) / (y_max - y_min)
-            fy = chart_top + ch_h - int(rel_top * ch_h)
-            fh = max(1, int((rel_top - rel_bottom) * ch_h))
-            alpha_color = (color[0], color[1], color[2], 65)
-            fill_surf = pygame.Surface((ch_w, fh), pygame.SRCALPHA)
-            fill_surf.fill(alpha_color)
-            surf.blit(fill_surf, (chart_left, fy))
+        draw_fill_bands(surf, _FILL_BANDS, chart_left, chart_top, ch_w, ch_h,
+                        y_max, y_min, alpha=80 if dark else 65)
 
         # ── Y 轴虚线 + 标签（风速，左侧） ──
         self._cached_tick_labels_y.clear()
         for yt in range(0, int(y_max) + 1, 20):
             rel = (yt - y_min) / (y_max - y_min)
             y_px = chart_top + ch_h - int(rel * ch_h)
-            draw_dashed_h(surf, chart_left, chart_left + ch_w, y_px, _CHART_COLORS['GRID_Y'])
-            lbl = rt(f_s, f"{yt}", TXT)
+            draw_dashed_h(surf, chart_left, chart_left + ch_w, y_px, C['GRID_Y'])
+            lbl = rt(f_s, f"{yt}", tc)
             surf.blit(lbl, (chart_left - lbl.get_width() - 8, y_px - lbl.get_height() // 2))
             self._cached_tick_labels_y.append((lbl, chart_left - lbl.get_width() - 8, y_px - lbl.get_height() // 2))
 
@@ -260,16 +246,16 @@ class IntensityChartDialog(DraggableDialog):
         while cursor <= t_max:
             rel = (cursor - t_min).total_seconds() / t_span
             x_px = chart_left + int(rel * ch_w)
-            draw_dashed_v(surf, x_px, chart_top, chart_top + ch_h, _CHART_COLORS['GRID_X'])
-            lbl = rt(f_s, f"{cursor.month}/{cursor.day}", TXT)
+            draw_dashed_v(surf, x_px, chart_top, chart_top + ch_h, C['GRID_X'])
+            lbl = rt(f_s, f"{cursor.month}/{cursor.day}", tc)
             surf.blit(lbl, (x_px - lbl.get_width() // 2, chart_top + ch_h + 5))
             self._cached_tick_labels_x.append((lbl, x_px - lbl.get_width() // 2, chart_top + ch_h + 5))
             cursor += timedelta(days=1)
 
         # 起始/结束时间
-        start_lbl = rt(f_s, t_min.strftime("%m/%d %HZ"), TXT)
+        start_lbl = rt(f_s, t_min.strftime("%m/%d %HZ"), tc)
         surf.blit(start_lbl, (chart_left, chart_top + ch_h + 22))
-        end_lbl = rt(f_s, t_max.strftime("%m/%d %HZ"), TXT)
+        end_lbl = rt(f_s, t_max.strftime("%m/%d %HZ"), tc)
         surf.blit(end_lbl, (chart_left + ch_w - end_lbl.get_width(), chart_top + ch_h + 22))
 
         # ── 强度点 + 线段 ──
@@ -363,14 +349,14 @@ class IntensityChartDialog(DraggableDialog):
         legend_x = chart_left
         for yt, color in _THRESHOLDS:
             pygame.draw.line(surf, color, (legend_x, legend_y + 5), (legend_x + 18, legend_y + 5), 2)
-            lbl = rt(f_s, f"{yt}", TXT)
+            lbl = rt(f_s, f"{yt}", tc)
             surf.blit(lbl, (legend_x + 22, legend_y - 2))
             legend_x += 55
 
         # ACE 图例
         ace_lgd_x = legend_x + 10
         pygame.draw.line(surf, ACE_CURVE_COLOR, (ace_lgd_x, legend_y + 5), (ace_lgd_x + 18, legend_y + 5), 2)
-        ace_lgd_lbl = rt(f_s, "ACE累计", TXT)
+        ace_lgd_lbl = rt(f_s, "ACE累计", tc)
         surf.blit(ace_lgd_lbl, (ace_lgd_x + 22, legend_y - 2))
 
         self._cached_chart = surf
@@ -382,7 +368,7 @@ class IntensityChartDialog(DraggableDialog):
     def draw(self, surface: pygame.Surface):
         if not self.active or self._typhoon is None:
             return
-        if self._cached_chart is None:
+        if self._cached_chart is None or getattr(self, '_built_dark', None) != self.dark_mode:
             self._build()
 
         box_x, box_y = self.bg_rect.x, self.bg_rect.y
@@ -392,11 +378,8 @@ class IntensityChartDialog(DraggableDialog):
         surface.blit(self._cached_chart, (box_x, box_y), area=src_rect)
 
         # 滚动条
-        if self._content_h > box_h:
-            bar_h = max(20, int(box_h * box_h / self._content_h))
-            bar_y = box_y + int(self._scroll_y * box_h / self._content_h)
-            pygame.draw.rect(surface, (160, 160, 160),
-                             pygame.Rect(box_x + box_w - 8, bar_y, 6, bar_h), border_radius=3)
+        draw_vscrollbar(surface, box_x + box_w - 8, box_y, box_h,
+                        self._content_h, box_h, self._scroll_y, dark=self.dark_mode)
 
         # ── 悬停信息 ──
         mouse_x, mouse_y = pygame.mouse.get_pos()
@@ -419,18 +402,8 @@ class IntensityChartDialog(DraggableDialog):
                 break
 
     def _draw_hover_tip(self, surface, info, mouse_x, mouse_y):
-        tip = rt(f_s, info, TXT)
-        tw, th = tip.get_width() + 10, tip.get_height() + 8
-        text_x, text_y = mouse_x + 15, mouse_y - 25
-        if text_y < 0:
-            text_y = mouse_y + 15
-        if text_x + tw > self.sim.screen_width:
-            text_x = self.sim.screen_width - tw - 5
-        tb = pygame.Surface((tw, th), pygame.SRCALPHA)
-        tb.fill((255, 255, 255, 210))
-        pygame.draw.rect(tb, BUTTON_BORDER, (0, 0, tw, th), 1)
-        tb.blit(tip, (5, 4))
-        surface.blit(tb, (text_x, text_y))
+        draw_tooltip(surface, info, (mouse_x, mouse_y),
+                     self.sim.screen_width, dark=self.dark_mode)
 
     # ═══════════════════════════════════════════════
     #  事件

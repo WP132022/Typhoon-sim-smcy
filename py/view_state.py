@@ -74,12 +74,14 @@ class ViewState:
         view_rect = pygame.Rect(-50, -50, sw + 100, sh + 100)
         for ty in tys:
             ty.update_screen_points(f, view_rect)
-            if hasattr(ty, '_cached_max_wind_color'):
-                delattr(ty, '_cached_max_wind_color')
+            for attr in ('_cached_max_wind_color', '_cached_peaks', '_cached_name_colors'):
+                if hasattr(ty, attr):
+                    delattr(ty, attr)
         if edit_typhoon:
             edit_typhoon.update_screen_points(f)
-            if hasattr(edit_typhoon, '_cached_max_wind_color'):
-                delattr(edit_typhoon, '_cached_max_wind_color')
+            for attr in ('_cached_max_wind_color', '_cached_peaks', '_cached_name_colors'):
+                if hasattr(edit_typhoon, attr):
+                    delattr(edit_typhoon, attr)
 
     def invalidate_all_path_caches(self, tys: List[Typhoon]) -> None:
         for ty in tys:
@@ -91,16 +93,12 @@ class ViewState:
             ty.v._path_cache_drag_key = ()
 
     def sync_land_state(self, tys: List[Typhoon]) -> None:
+        """按地理坐标同步各台风的陆上状态（视图无关，与登陆判定一致）。"""
         map_mgr = self._map_mgr
-        if map_mgr.land_img is None:
-            map_mgr.update_land_mask()
-        if map_mgr.land_img is None:
+        if map_mgr._load_land_orig() is None:
             return
-        f = self.latlon_to_screen
         for ty in tys:
             pos = ty.cpos()
             if not pos:
                 continue
-            x, y = f(pos['la'], pos['lo'])
-            if 0 <= x < self.screen_width and 0 <= y < self.map_height:
-                ty.v.last_on_land = map_mgr.is_land_at_screen(x, y)
+            ty.v.last_on_land = map_mgr.is_land_at_geo(pos['la'], pos['lo'])

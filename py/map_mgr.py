@@ -145,6 +145,11 @@ class MapManager:
         self._land_orig: Optional[pygame.Surface] = None
         self._cached_map_render: Optional[pygame.Surface] = None
         self._cached_render_hash = None
+        self._land_pending: bool = False
+        self._land_due: int = 0
+        self._land_geo_alpha: Optional[bytes] = None
+        self._land_geo_w: int = 0
+        self._land_geo_h: int = 0
 
     def _view_hash(self):
         v = self.map_view
@@ -207,13 +212,27 @@ class MapManager:
             self._land_alpha_bytes = None
             self._land_w = 0
 
+    _LAND_REBUILD_DELAY_MS = 180   # 视图连续变化(缩放/拖拽)期间推迟陆地掩码重建
+
     def update_land_mask(self):
         if self.map_view is None:
             return
+        now = pygame.time.get_ticks()
         vh = self._view_hash()
         if vh == self._cached_render_hash:
+            # 视图稳定后补做被推迟的陆地掩码重建
+            if self._land_pending and now >= self._land_due:
+                self._rebuild_land_and_overlay()
+                self._land_pending = False
             return
-        self._rebuild_land_and_overlay()
+        # 地图渲染必须立即更新（视觉）；
+        # 陆地掩码非视觉（仅登陆检测用），视图变化期间整体推迟
+        if self._land_alpha_bytes is None:
+            self._rebuild_land_and_overlay()
+            self._land_pending = False
+        else:
+            self._land_pending = True
+            self._land_due = now + self._LAND_REBUILD_DELAY_MS
         w, h = self.sim.screen_width, self.sim.map_height
         self._cached_map_render = pygame.Surface((w, h))
         self.map_view.draw(self._cached_map_render, pygame.Rect(0, 0, w, h))
@@ -226,6 +245,24 @@ class MapManager:
         w = self._land_w
         if 0 <= sx < w and 0 <= sy < len(ab) // w:
             return ab[sy * w + sx] > 0
+        return False
+
+    def is_land_at_geo(self, la, lo):
+        """按经纬度直接采样原始陆地掩码（与视图无关）。
+        首次调用时把原图 alpha 通道转为 bytes 查表，避免每次 get_at 锁表面。"""
+        land = self._load_land_orig()
+        if land is None:
+            return False
+        ab = self._land_geo_alpha
+        if ab is None:
+            ab = pygame.image.tobytes(land, 'RGBA')[3::4]
+            self._land_geo_alpha = ab
+            self._land_geo_w, self._land_geo_h = land.get_size()
+        lw, lh = self._land_geo_w, self._land_geo_h
+        x = int((lo % 360.0) / 360.0 * lw) % lw
+        y = int((90.0 - la) / 180.0 * lh)
+        if 0 <= y < lh:
+            return ab[y * lw + x] > 0
         return False
 
     def update_view(self):

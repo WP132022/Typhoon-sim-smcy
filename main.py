@@ -8,6 +8,10 @@ script_dir = os.path.dirname(os.path.abspath(__file__))
 os.chdir(script_dir)
 
 pygame.init()
+try:
+    pygame.mixer.set_num_channels(32)
+except pygame.error:
+    pass
 
 
 def _apply_dpi():
@@ -50,8 +54,9 @@ def main():
         sim.toggle_window_topmost()
 
     running = True
+    perf = pygame.time.get_ticks
     while running:
-        dt = clock.tick(0) / 1000.0
+        dt = clock.tick(max(0, getattr(sim.cfg, 'fps_cap', 120))) / 1000.0
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 running = False
@@ -59,8 +64,12 @@ def main():
                 sim.handle_resize(event.w, event.h)
             else:
                 sim.handle_event(event)
+        t0 = perf()
         sim.update(dt)
+        t1 = perf()
         sim.draw(screen)
+        sim._t_update_ms = t1 - t0
+        sim._t_draw_ms = perf() - t1
         pygame.display.flip()
 
     sim.save_config(force=True)

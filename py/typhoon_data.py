@@ -47,8 +47,9 @@ class TyphoonDataMixin:
             if not self.sim.pl:
                 self.rst()
                 self.cace = self.pts[self.ci]['ace'] if self.pts and self.ci < len(self.pts) else 0.0
-        if hasattr(self, '_cached_max_wind_color'):
-            delattr(self, '_cached_max_wind_color')
+        for attr in ('_cached_max_wind_color', '_cached_peaks', '_cached_name_colors'):
+            if hasattr(self, attr):
+                delattr(self, attr)
 
     def add_point(self, t: str, la: float, lo: float, w: int, p: int,
                   st: str, sn: str = "") -> None:
@@ -91,12 +92,18 @@ class TyphoonDataMixin:
         self.points_time = []
         if hasattr(self, '_cached_max_wind_color'):
             delattr(self, '_cached_max_wind_color')
+        if hasattr(self, '_cached_peaks'):
+            delattr(self, '_cached_peaks')
+        if hasattr(self, '_cached_name_colors'):
+            delattr(self, '_cached_name_colors')
 
     def recalc_ace(self) -> None:
         total = 0.0
+        geo_enabled = bool(self.sim and self.sim.ace_geo_limit_enabled)
         for pt in self.pts:
             st = pt['st'].upper()
-            if st in ('TS', 'TY', 'ST', 'HU', '') and pt.get('official', True) and pt['w'] >= 35:
+            geo_ok = (not geo_enabled) or self.sim.ace_engine.point_in_limit(pt['la'], pt['lo'])
+            if st in ('TS', 'TY', 'ST', 'HU', '') and pt.get('official', True) and pt['w'] >= 35 and geo_ok:
                 pace = round((pt['w'] * pt['w']) / 10000.0, 4)
             else:
                 pace = 0.0
@@ -105,8 +112,9 @@ class TyphoonDataMixin:
             pt['ace'] = total
         self.tace = total
         self.cumace = total
-        if hasattr(self, '_cached_max_wind_color'):
-            delattr(self, '_cached_max_wind_color')
+        for attr in ('_cached_max_wind_color', '_cached_peaks', '_cached_name_colors'):
+            if hasattr(self, attr):
+                delattr(self, attr)
 
     def recalc_simulated_times(self) -> None:
         if not self.pts:

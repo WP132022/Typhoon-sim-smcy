@@ -1,8 +1,8 @@
 # py/statistics/shared.py
-"""统计模块共享常量：色表、强度阈值。"""
+"""统计模块共享常量：色表、强度阈值、强度填充带。"""
 from typing import List, Tuple
 
-from ..constants import TD, TS, C1, C2, C3, C4, C5_L, C5_M, C5_D, C2_MINUS, C3_MINUS, C4_ST
+from ..constants import DB, TD, TS, C1, C2, C3, C4, C5_L, C5_M, C5_D, C2_MINUS, C3_MINUS, C4_ST
 
 # ── 12 种可区分颜色 ──
 COLORS = [
@@ -26,4 +26,21 @@ _THRESHOLDS: List[Tuple[int, Tuple[int, int, int]]] = [
     (137, C5_L),
     (155, C5_M),
     (170, C5_D),
+]
+
+# ── 强度填充带：(y_lower, y_upper, color) ──
+_FILL_BANDS: List[Tuple[float, float, Tuple[int, int, int]]] = [
+    (0,   29,  DB),
+    (29,  34,  TD),
+    (34,  64,  TS),
+    (64,  83,  C1),
+    (83,  86,  C2_MINUS),
+    (86,  96,  C2),
+    (96,  105, C3_MINUS),
+    (105, 113, C3),
+    (113, 130, C4),
+    (130, 137, C4_ST),
+    (137, 155, C5_L),
+    (155, 170, C5_M),
+    (170, 999, C5_D),
 ]

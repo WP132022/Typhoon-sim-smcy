@@ -4,7 +4,7 @@ from __future__ import annotations
 import os
 import re
 import pygame
-from .constants import f_s, f_m, rt, TXT, TYPHOON_DIR, BUTTON_BORDER, BUTTON_DISABLED
+from .constants import f_s, f_m, rt, TXT, TYPHOON_DIR, BUTTON_BORDER, BUTTON_DISABLED, SETTINGS_TEXT_LIGHT
 from .typhoon import Typhoon
 from .input_field import InputField
 from .dialog_base import Dialog
@@ -30,7 +30,7 @@ class NewTyphoonDialog(Dialog):
         self.fields.clear()
         for i, label in enumerate(self.labels):
             rect = (start_x + i * (fw + sp), dy + 25, fw, fh)
-            f = InputField(rect, label=label, max_length=30)
+            f = InputField(rect, label=label, max_length=30, dark=self.dark_mode)
             self.fields.append(f)
 
         self.fields[3].set_text("")
@@ -59,7 +59,7 @@ class NewTyphoonDialog(Dialog):
                 if field.rect.collidepoint(e.pos):
                     for f in self.fields:
                         f.deactivate()
-                    field.activate()
+                    field.activate_at(e.pos[0])
                     self.current_field = i
                     return True
 
@@ -135,12 +135,21 @@ class NewTyphoonDialog(Dialog):
         if not self.active:
             return
         dy = self.sim.screen_height - 150
-        self.draw_background(surface, pygame.Rect(0, dy - 10, self.sim.screen_width, 120))
+        r = pygame.Rect(0, dy - 10, self.sim.screen_width, 120)
+        dark = self.dark_mode
+        if dark:
+            self.draw_dark_panel(surface, r)
+        else:
+            self.draw_background(surface, r)
 
         for field in self.fields:
             field.draw(surface)
 
         cr = pygame.Rect(self.sim.screen_width // 2 - 90, dy + 70, 80, 30)
         ca = pygame.Rect(self.sim.screen_width // 2 + 10, dy + 70, 80, 30)
-        self.draw_button(surface, cr, self.confirm_text, BUTTON_BORDER)
-        self.draw_button(surface, ca, self.cancel_text, BUTTON_DISABLED)
+        if dark:
+            self.draw_dark_button(surface, cr, self.confirm_text)
+            self.draw_dark_button(surface, ca, self.cancel_text)
+        else:
+            self.draw_button(surface, cr, self.confirm_text, BUTTON_BORDER)
+            self.draw_button(surface, ca, self.cancel_text, BUTTON_DISABLED)

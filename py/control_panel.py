@@ -48,6 +48,7 @@ class ControlPanel:
         self._buttons: List[PanelButton] = []
         self._btn_map: dict = {}       # key → PanelButton
         self._row2_btns: List[PanelButton] = []  # buttons in second row, left to right
+        self._build_key: tuple = ()
 
     def _x(self, n: int, w: int = None) -> int:
         """第 n 个按钮的 x 坐标（n 从 0 开始，间距 90）。"""
@@ -66,6 +67,15 @@ class ControlPanel:
         return self._x(4) + self.BUTTON_W + 15
 
     def build(self) -> None:
+        # 状态未变化时跳过重建（每帧调用，但布局只依赖以下状态）
+        sim = self.sim
+        key = (sim.md, sim.pl, id(sim.play_text),
+               bool(sim.md == "edit" and sim.edit_typhoon),
+               sim.map_height, sim.screen_width)
+        if key == self._build_key and self._buttons:
+            return
+        self._build_key = key
+
         self._buttons.clear()
         self._btn_map.clear()
         self._row2_btns.clear()
@@ -190,8 +200,10 @@ class ControlPanel:
             pygame.draw.line(surface, CONTROL_PANEL_LINE,
                              (0, py), (self.sim.screen_width, py), 2)
 
+        mouse_pos = pygame.mouse.get_pos()
+        mouse_down = pygame.mouse.get_pressed()[0]
         for btn in self._buttons:
-            self._draw_button(surface, btn, dark)
+            self._draw_button(surface, btn, dark, mouse_pos, mouse_down)
 
         # 速度条
         by = self._by()
@@ -231,13 +243,13 @@ class ControlPanel:
                     script_btn.y + 4))
 
     @staticmethod
-    def _draw_button(surface: pygame.Surface, btn: PanelButton, dark: bool = False) -> None:
+    def _draw_button(surface: pygame.Surface, btn: PanelButton, dark: bool = False,
+                     mouse_pos: Tuple[int, int] = (-1, -1), mouse_down: bool = False) -> None:
         if not btn.visible or btn.text_surf is None:
             return
         r = btn.rect
-        mouse_x, mouse_y = pygame.mouse.get_pos()
-        hover = r.collidepoint(mouse_x, mouse_y)
-        pressed = hover and pygame.mouse.get_pressed()[0]
+        hover = r.collidepoint(mouse_pos)
+        pressed = hover and mouse_down
 
         if btn.disabled:
             final_color = (100, 100, 110) if dark else (150, 150, 150)

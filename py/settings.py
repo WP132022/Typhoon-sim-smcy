@@ -95,6 +95,7 @@ class Settings(DraggableDialog):
         self.point_size = 150
         self.icon_size = 100
         self.name_size = 100
+        self.peak_label_size = 100
         self.disable_dpi_scaling = False
         self.fade_typhoon = True
         self.fade_path = True
@@ -102,7 +103,9 @@ class Settings(DraggableDialog):
         self.path_mode = "markers"
         self.ace_interpolated = False
         self.show_fps = False
+        self.fps_cap = 120
         self.show_ri_effect = True
+        self.show_future_path = True
         self.show_ace_bar = True
         self.show_ace_total = True
         self.basin_filter_enabled = True
@@ -174,6 +177,7 @@ class Settings(DraggableDialog):
         self.point_size_text = rt(f_m, "台风路径点大小 (%):", TX)
         self.icon_size_text = rt(f_m, "台风图标大小 (%):", TX)
         self.name_size_text = rt(f_m, "台风名称大小 (%):", TX)
+        self.peak_label_text = rt(f_m, "巅峰/登陆文字 (%):", TX)
         self.sh_label = rt(f_m, "窗口高度:", TX)
         self.sw_label = rt(f_m, "窗口宽度:", TX)
         self.mlo_label = rt(f_m, "最西经度:", TX)
@@ -202,7 +206,12 @@ class Settings(DraggableDialog):
         self.path_mode_modes = [rt(f_m, "点阵", (255, 255, 255)), rt(f_m, "渐变线", (255, 255, 255))]
         self.ace_interp_text = rt(f_m, "连续 ACE:", TX)
         self.fps_text = rt(f_m, "显示 FPS:", TX)
+        self.fps_cap_text = rt(f_m, "帧率上限:", TX)
+        self.fps_cap_modes = [rt(f_m, "60", (255, 255, 255)),
+                              rt(f_m, "120", (255, 255, 255)),
+                              rt(f_m, "无限制", (255, 255, 255))]
         self.show_ri_text = rt(f_m, "显示 ERI 动画:", TX)
+        self.future_path_text = rt(f_m, "显示未经过的路径:", TX)
         self.fix_icon_point_text = rt(f_m, "固定图标与路径点大小:", TX)
         self.color_scheme_text = rt(f_m, "配色方案:", TX)
         self.icon_set_text = rt(f_m, "台风图标:", TX)
@@ -264,6 +273,7 @@ class Settings(DraggableDialog):
         self.point_size = self.sim.point_size
         self.icon_size = self.sim.icon_size
         self.name_size = getattr(self.sim, 'name_size', 100)
+        self.peak_label_size = getattr(self.sim, 'peak_label_size', 100)
         self.fix_icon_point_size = self.sim.fix_icon_point_size
         self.disable_dpi_scaling = self.sim.disable_dpi_scaling
         self.fade_typhoon = self.sim.fade_typhoon
@@ -272,7 +282,9 @@ class Settings(DraggableDialog):
         self.path_mode = getattr(self.sim, 'path_mode', 'markers')
         self.ace_interpolated = self.sim.ace_interpolated
         self.show_fps = self.sim.show_fps
+        self.fps_cap = getattr(self.sim, 'fps_cap', 120)
         self.show_ri_effect = getattr(self.sim, 'show_ri_effect', True)
+        self.show_future_path = getattr(self.sim, 'show_future_path', True)
         self.show_ace_bar = getattr(self.sim, 'show_ace_bar', True)
         self.show_ace_total = getattr(self.sim, 'show_ace_total', True)
         self.basin_filter_enabled = getattr(self.sim, 'basin_filter_enabled', True)
@@ -328,7 +340,8 @@ class Settings(DraggableDialog):
         self.fields.clear()
         self._field_offsets.clear()
         for key, val, rect, validator in self._get_fields_config():
-            field = InputField(rect, max_length=10, validator=validator)
+            field = InputField(rect, max_length=10, validator=validator,
+                               dark=self.dark_mode)
             field.set_text(val)
             field.key = key
             self.fields.append(field)
@@ -360,8 +373,9 @@ class Settings(DraggableDialog):
                 ("point_size", f"{self.point_size}", (COL_X, y0, FIELD_W, FIELD_H), self.validate_int),
                 ("icon_size", f"{self.icon_size}", (COL_X, y1, FIELD_W, FIELD_H), self.validate_int),
                 ("name_size", f"{self.name_size}", (COL_X, y2, FIELD_W, FIELD_H), self.validate_int),
-                ("screen_height", f"{self.screen_height}", (COL_X, y3, FIELD_W, FIELD_H), self.validate_int),
-                ("screen_width", f"{self.screen_width}", (COL_X, y4, FIELD_W, FIELD_H), self.validate_int),
+                ("peak_label_size", f"{self.peak_label_size}", (COL_X, y3, FIELD_W, FIELD_H), self.validate_int),
+                ("screen_height", f"{self.screen_height}", (COL_X, y4, FIELD_W, FIELD_H), self.validate_int),
+                ("screen_width", f"{self.screen_width}", (COL_X, y5, FIELD_W, FIELD_H), self.validate_int),
             ]
         elif self.tab_index == 2:  # 地图（标签向下偏移 26px 因模式切换）
             y0m = base_y + 26
@@ -618,19 +632,20 @@ class Settings(DraggableDialog):
         surface.blit(self.point_size_text, (dx + 30, y + self._lh(self.point_size_text, 24)))
         surface.blit(self.icon_size_text, (dx + 30, y + 30 + self._lh(self.icon_size_text, 24)))
         surface.blit(self.name_size_text, (dx + 30, y + 60 + self._lh(self.name_size_text, 24)))
-        surface.blit(self.sh_label, (dx + 30, y + 90 + self._lh(self.sh_label, 24)))
-        surface.blit(self.sw_label, (dx + 30, y + 120 + self._lh(self.sw_label, 24)))
-        surface.blit(self.fix_icon_point_text, (dx + 30, y + 160 + self._lh(self.fix_icon_point_text, 16)))
-        self._cb(surface, dx + 280, y + 160, self.fix_icon_point_size, 'fix_icon_point_size')
+        surface.blit(self.peak_label_text, (dx + 30, y + 90 + self._lh(self.peak_label_text, 24)))
+        surface.blit(self.sh_label, (dx + 30, y + 120 + self._lh(self.sh_label, 24)))
+        surface.blit(self.sw_label, (dx + 30, y + 150 + self._lh(self.sw_label, 24)))
+        surface.blit(self.fix_icon_point_text, (dx + 30, y + 190 + self._lh(self.fix_icon_point_text, 16)))
+        self._cb(surface, dx + 280, y + 190, self.fix_icon_point_size, 'fix_icon_point_size')
         dm_text = rt(f_m, "主题配色:", SETTINGS_TEXT_LIGHT if self.dark_mode else TXT)
-        surface.blit(dm_text, (dx + 30, y + 187 + self._lh(dm_text, 22)))
+        surface.blit(dm_text, (dx + 30, y + 217 + self._lh(dm_text, 22)))
         for i, (lbl, is_dark) in enumerate([("暗色", True), ("亮色", False)]):
-            rect = pygame.Rect(dx + 180 + i * 80, y + 187, 72, 22)
+            rect = pygame.Rect(dx + 180 + i * 80, y + 217, 72, 22)
             self._tg(surface, rect, rt(f_m, lbl, (255, 255, 255)), self.dark_mode == is_dark,
                      lambda d=is_dark: (setattr(self.sim, 'dark_mode', d), self._refresh_texts()))
-        surface.blit(self.color_scheme_text, (dx + 30, y + 217 + self._lh(self.color_scheme_text, 22)))
+        surface.blit(self.color_scheme_text, (dx + 30, y + 247 + self._lh(self.color_scheme_text, 22)))
         for i, lbl in enumerate([rt(f_m, "高对比度", (255, 255, 255)), rt(f_m, "旧版", (255, 255, 255))]):
-            rect = pygame.Rect(dx + 180 + i * 108, y + 217, 100, 22)
+            rect = pygame.Rect(dx + 180 + i * 108, y + 247, 100, 22)
             self._tg(surface, rect, lbl, self.color_scheme == i + 1, lambda s=i+1: setattr(self, 'color_scheme', s))
 
     def _draw_tab_map(self, surface, dx, dy, top_y, mx, my):
@@ -662,11 +677,16 @@ class Settings(DraggableDialog):
         surface.blit(self.hemisphere_label, (dx + 30, y - 1 + self._lh(self.hemisphere_label, 22)))
         for i, mode in enumerate(self.hemisphere_modes):
             rect = pygame.Rect(dx + 180 + i * 100, y - 1, 80, 22)
-            callback = (lambda h=HEMISPHERE_NORTH if i == 0 else HEMISPHERE_SOUTH: (
-                setattr(self, 'hemisphere', h),
-                setattr(self, '_ace_changed', True),
-                setattr(self, '_hemisphere_changed', True)))
-            self._tg(surface, rect, mode, self.hemisphere == (HEMISPHERE_NORTH if i == 0 else HEMISPHERE_SOUTH), callback)
+            h_val = HEMISPHERE_NORTH if i == 0 else HEMISPHERE_SOUTH
+            def _mk_cb(new_hemi):
+                def _cb():
+                    changed = (new_hemi != self.sim.hemisphere)
+                    setattr(self, 'hemisphere', new_hemi)
+                    if changed:
+                        setattr(self, '_ace_changed', True)
+                        setattr(self, '_hemisphere_changed', True)
+                return _cb
+            self._tg(surface, rect, mode, self.hemisphere == h_val, _mk_cb(h_val))
 
         for idx, (attr, y_off) in enumerate([
             ('disable_dpi_scaling', gap), ('ac', gap*2),
@@ -693,6 +713,18 @@ class Settings(DraggableDialog):
         eri_y = y + gap * 11 + 20
         surface.blit(self.show_ri_text, (dx + 30, eri_y))
         self._cb(surface, dx + self.bg_rect.width - 50, eri_y, self.show_ri_effect, 'show_ri_effect')
+
+        # 未经过路径
+        fp_y = y + gap * 12 + 25
+        surface.blit(self.future_path_text, (dx + 30, fp_y))
+        self._cb(surface, dx + self.bg_rect.width - 50, fp_y, self.show_future_path, 'show_future_path')
+
+        # 帧率上限
+        fc_y = y + gap * 13 + 30
+        surface.blit(self.fps_cap_text, (dx + 30, fc_y - 1 + self._lh(self.fps_cap_text, 22)))
+        for i, (lbl, v) in enumerate(zip(self.fps_cap_modes, (60, 120, 0))):
+            rect = pygame.Rect(dx + 180 + i * 90, fc_y - 1, 80, 22)
+            self._tg(surface, rect, lbl, self.fps_cap == v, lambda m=v: setattr(self, 'fps_cap', m))
 
     def _draw_tab_ace(self, surface, dx, dy, top_y, mx, my):
         y = top_y + 5
@@ -1125,7 +1157,7 @@ class Settings(DraggableDialog):
                 if field.rect.collidepoint(e.pos):
                     for f in self.fields:
                         f.deactivate()
-                    field.activate()
+                    field.activate_at(e.pos[0])
                     self.current_field = i
                     return True
         for i, field in enumerate(self.fields):
@@ -1211,7 +1243,8 @@ class Settings(DraggableDialog):
                         self.sim.show_error(f"无效纬度: {val} (需加 N/S 后缀, 0 除外)")
                         return
                     validated[key] = parsed
-                elif key in ('screen_width', 'screen_height', 'point_size', 'icon_size', 'name_size'):
+                elif key in ('screen_width', 'screen_height', 'point_size', 'icon_size',
+                             'name_size', 'peak_label_size'):
                     validated[key] = int(val)
                 elif key in ('mis', 'mas', 'main_rot_speed', 'level3_rot_speed'):
                     validated[key] = float(val)
@@ -1267,6 +1300,7 @@ class Settings(DraggableDialog):
         self.sim.point_size = self.point_size
         self.sim.icon_size = self.icon_size
         self.sim.name_size = self.name_size
+        self.sim.peak_label_size = self.peak_label_size
         self.sim.fix_icon_point_size = self.fix_icon_point_size
         self.sim.disable_dpi_scaling = self.disable_dpi_scaling
         self.sim.fade_typhoon = self.fade_typhoon
@@ -1275,7 +1309,13 @@ class Settings(DraggableDialog):
         self.sim.path_mode = self.path_mode
         self.sim.ace_interpolated = self.ace_interpolated
         self.sim.show_fps = self.show_fps
+        self.sim.fps_cap = self.fps_cap
         self.sim.show_ri_effect = self.show_ri_effect
+        if getattr(self.sim, 'show_future_path', True) != self.show_future_path:
+            self.sim.show_future_path = self.show_future_path
+            self.sim._invalidate_all_path_caches()
+        else:
+            self.sim.show_future_path = self.show_future_path
         self.sim.icon_set = self.icon_set
         self.sim.color_scheme = self.color_scheme
         self.sim.show_ace_bar = self.show_ace_bar

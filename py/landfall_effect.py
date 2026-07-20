@@ -16,8 +16,8 @@ _LABEL_FADE = 0.3
 _label_cache: dict = {}
 
 
-def _get_label_surf(label: str, color) -> pygame.Surface:
-    key = (label, color)
+def _get_label_surf(label: str, color, scale: float = 1.0) -> pygame.Surface:
+    key = (label, color, round(scale, 2))
     surf = _label_cache.get(key)
     if surf is None:
         fg = _label_font.render(label, True, color)
@@ -26,6 +26,10 @@ def _get_label_surf(label: str, color) -> pygame.Surface:
         for dx, dy in _OUTLINE:
             surf.blit(bk, (dx + 1, dy + 1))
         surf.blit(fg, (1, 1))
+        if scale != 1.0:
+            nw = max(1, int(surf.get_width() * scale))
+            nh = max(1, int(surf.get_height() * scale))
+            surf = pygame.transform.smoothscale(surf, (nw, nh))
         if len(_label_cache) > 64:
             _label_cache.pop(next(iter(_label_cache)))
         _label_cache[key] = surf
@@ -33,7 +37,7 @@ def _get_label_surf(label: str, color) -> pygame.Surface:
 
 
 def _draw_strength_label(surface, label: str, color, x: int, y_top: int,
-                         elapsed: float) -> None:
+                         elapsed: float, scale: float = 1.0) -> None:
     """登陆图标下方的强度标注：显示 2 秒，淡入淡出。"""
     if not label or elapsed < 0 or elapsed >= _LABEL_DURATION:
         return
@@ -41,12 +45,68 @@ def _draw_strength_label(surface, label: str, color, x: int, y_top: int,
     alpha = int(255 * max(0.0, a))
     if alpha <= 0:
         return
-    surf = _get_label_surf(label, color)
+    surf = _get_label_surf(label, color, scale)
     if alpha < 255:
         surf = surf.copy()
         surf.set_alpha(alpha)
     r = surf.get_rect(midtop=(x, y_top))
     surface.blit(surf, r)
+
+
+# ── 登陆点标记 ──
+
+_MARKER_MAP = {
+    'TD': 'landfall_TD', 'SD': 'landfall_TD',
+    'TS': 'landfall_TS',
+    'STS': 'landfall_STS', 'SS': 'landfall_STS',
+    'C1': 'landfall_C1',
+    'C2': 'landfall_C2', 'C2-': 'landfall_C2',
+    'C3': 'landfall_C3', 'C3-': 'landfall_C3',
+    'C4': 'landfall_C4', 'C4-ST': 'landfall_C4',
+    'C5': 'landfall_C5',
+}
+
+
+def landfall_marker_name(wind: int, cat: str):
+    """登陆点标记 png 名（155+/170+ 专属标记仅限热带 C5），无对应资源返回 None。"""
+    if cat == 'C5':
+        if wind >= 170:
+            return 'landfall_170'
+        if wind >= 155:
+            return 'landfall_155'
+    return _MARKER_MAP.get(cat)
+
+
+class LandedEffect:
+    """Landed-X 落地标记动画：在登陆点一次性播放（96×96, 60fps）。"""
+
+    def __init__(self, cat: str, lon: float, lat: float, start_time: float,
+                 latlon_to_screen_func: Callable[[float, float], tuple],
+                 size: int) -> None:
+        from .smcy_icon import landed_frame_count
+        self.cat = cat
+        self.lon = lon
+        self.lat = lat
+        self.start_time = start_time
+        self.latlon_to_screen = latlon_to_screen_func
+        self.size = max(8, size)
+        self._count = landed_frame_count(cat)
+
+    def update(self, current_time: float) -> bool:
+        if self._count <= 0:
+            return False
+        elapsed = (current_time - self.start_time) / 1000.0
+        return int(elapsed * 60) < self._count
+
+    def draw(self, surface: pygame.Surface, current_time: float) -> None:
+        from .smcy_icon import get_landed_frame
+        elapsed = (current_time - self.start_time) / 1000.0
+        idx = int(elapsed * 60)
+        frame = get_landed_frame(self.cat, idx, (self.size, self.size))
+        if frame is None:
+            return
+        x, y = self.latlon_to_screen(self.lat, self.lon)
+        surface.blit(frame, frame.get_rect(center=(x, y)))
 
 
 class LandfallEffect:
@@ -55,7 +115,8 @@ class LandfallEffect:
                  start_time: float,
                  latlon_to_screen_func: Callable[[float, float], tuple],
                  label: str = "",
-                 label_color: Tuple[int, int, int] = (255, 255, 255)) -> None:
+                 label_color: Tuple[int, int, int] = (255, 255, 255),
+                 label_scale: float = 1.0) -> None:
         self.strength = strength
         self.lon = lon
         self.lat = lat
@@ -65,6 +126,7 @@ class LandfallEffect:
         self.latlon_to_screen = latlon_to_screen_func
         self.label = label
         self.label_color = label_color
+        self.label_scale = label_scale
         self._flash_alpha: int = 255
         self._ring_alpha: int = 255
 
@@ -92,8 +154,8 @@ class LandfallEffect:
             r = rotated.get_rect(center=(x, y))
             surface.blit(rotated, r)
         elapsed = (current_time - self.start_time) / 1000.0
-        y_top = y + (self.img1.get_height() // 2 + 4 if self.img1 else 20)
-        _draw_strength_label(surface, self.label, self.label_color, x, y_top, elapsed)
+        _draw_strength_label(surface, self.label, self.label_color, x, y + 14,
+                             elapsed, self.label_scale)
 
 
 class LandfallEffectSMCY:
@@ -104,7 +166,8 @@ class LandfallEffectSMCY:
                  start_time: float,
                  latlon_to_screen_func: Callable[[float, float], tuple],
                  label: str = "",
-                 label_color: Tuple[int, int, int] = (255, 255, 255)) -> None:
+                 label_color: Tuple[int, int, int] = (255, 255, 255),
+                 label_scale: float = 1.0) -> None:
         self.strength = strength
         self.lon = lon
         self.lat = lat
@@ -113,8 +176,8 @@ class LandfallEffectSMCY:
         self.latlon_to_screen = latlon_to_screen_func
         self.label = label
         self.label_color = label_color
+        self.label_scale = label_scale
         self._frame_count = len(frames)
-        self._half_h = frames[0].get_height() // 2 if frames else 20
 
     def update(self, current_time: float) -> bool:
         elapsed = (current_time - self.start_time) / 1000.0
@@ -129,4 +192,4 @@ class LandfallEffectSMCY:
             r = frame.get_rect(center=(x, y))
             surface.blit(frame, r)
         _draw_strength_label(surface, self.label, self.label_color,
-                             x, y + self._half_h + 4, elapsed)
+                             x, y + 14, elapsed, self.label_scale)

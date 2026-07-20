@@ -11,9 +11,11 @@ from .constants import (
     f_s, f_m, rt, TXT, LIST_HL, BUTTON_BORDER, BUTTON_DISABLED, BUTTON_BG,
     TY_LIST_ROWS_PER_PAGE, TY_LIST_ITEM_HEIGHT, TY_LIST_WIDTH, TY_LIST_TOP_OFFSET,
     DIALOG_TITLE_BAR_HEIGHT,
+    SETTINGS_TEXT_LIGHT,
 )
 from .input_field import InputField
 from .dialog_base import DraggableDialog
+from .utils import display_category
 from typing import List, Dict, Tuple
 
 
@@ -45,13 +47,15 @@ class TyList(DraggableDialog):
         self.jump_input = ""
         self.edit_field = None
 
-        self.search_field = InputField(pygame.Rect(0, 0, 180, 24), max_length=50, font=f_s)
+        self.search_field = InputField(pygame.Rect(0, 0, 180, 24), max_length=50, font=f_s,
+                                        dark=self.dark_mode)
         self._filtered_indices: List[int] = []
         self._basin_order: Dict[str, int] = {}
         self._area_name_map: Dict[str, str] = {}
 
         self.title_bar_height = DIALOG_TITLE_BAR_HEIGHT
         self.title = rt(f_m, "台风列表", TXT)
+        self.title_dark = rt(f_m, "台风列表", SETTINGS_TEXT_LIGHT)
         self.name_btn_text = rt(f_s, "编辑名称", (255, 255, 255))
         self.number_btn_text = rt(f_s, "编辑编号", (255, 255, 255))
         self.filename_btn_text = rt(f_s, "编辑文件名", (255, 255, 255))
@@ -130,21 +134,26 @@ class TyList(DraggableDialog):
             disp = f"{sy} {base}"
         else:
             disp = base
-        vw = [p['w'] for p in ty.pts if p['st'].upper() not in ('MD', 'SS', 'SD', 'EX', 'LO')]
-        mw = max(vw) if vw else 0
-        cat = self.sim.gsc(mw, "")
+        vp = [p for p in ty.pts if p['st'].upper() not in ('MD', 'SS', 'SD', 'EX', 'LO')]
+        if vp:
+            mwp = max(vp, key=lambda p: p['w'])
+            mw = mwp['w']
+            cat = self.sim.gsc(mw, mwp.get('st', ''))
+        else:
+            mw, cat = 0, "N/A"
         st = ty.pts[0]['t'] if ty.pts else "????"
         area_name = self._area_name_map.get(ty.basin, ty.basin) if hasattr(self, '_area_name_map') else ''
-        info = f"{cat} {mw}kt  ACE:{ty.tace:.4f}  起始:{st}  {area_name}"
+        info = f"{display_category(cat)} {mw}kt  ACE:{ty.tace:.4f}  起始:{st}  {area_name}"
         return disp, info
 
     def _get_row_hash(self, ty) -> str:
         disp, info = self._build_row_texts(ty)
-        return f"{disp}|{info}"
+        return f"{disp}|{info}|{self.dark_mode}"
 
     def _render_row(self, ty) -> Dict[str, pygame.Surface]:
         disp, info = self._build_row_texts(ty)
-        return {'name': rt(f_m, disp, TXT, 530), 'info': rt(f_s, info, TXT, 530)}
+        tc = SETTINGS_TEXT_LIGHT if self.dark_mode else TXT
+        return {'name': rt(f_m, disp, tc, 530), 'info': rt(f_s, info, tc, 530)}
 
     def _update_bg_rect(self):
         lw = TY_LIST_WIDTH
@@ -455,8 +464,14 @@ class TyList(DraggableDialog):
         if not self.active:
             return
         lx, ly, lw, lh = self.bg_rect
-        self.draw_background(surface, self.bg_rect)
-        self.draw_title(surface, self.title, self.bg_rect, y_offset=15)
+        dark = self.dark_mode
+        tc = SETTINGS_TEXT_LIGHT if dark else TXT
+        if dark:
+            self.draw_dark_panel(surface, self.bg_rect)
+            self.draw_title(surface, self.title_dark, self.bg_rect, y_offset=15)
+        else:
+            self.draw_background(surface, self.bg_rect)
+            self.draw_title(surface, self.title, self.bg_rect, y_offset=15)
 
         self.search_field.rect = self._search_rect()
         self.search_field.draw(surface)
@@ -471,12 +486,13 @@ class TyList(DraggableDialog):
 
             if oi == self.si:
                 hl = pygame.Surface((lw - 40, 66), pygame.SRCALPHA)
-                hl.fill(LIST_HL)
+                hl.fill((70, 105, 165, 130) if dark else LIST_HL)
                 surface.blit(hl, (lx + 20, y + 2))
 
             if self.ei == oi and self.edit_type == 'name':
                 if self.edit_field is None:
-                    self.edit_field = InputField((lx + 30, y + 5, 300, 25), max_length=30)
+                    self.edit_field = InputField((lx + 30, y + 5, 300, 25), max_length=30,
+                                                  dark=self.dark_mode)
                     self.edit_field.set_text(ty.cust or "")
                     self.edit_field.activate()
             else:
@@ -491,7 +507,7 @@ class TyList(DraggableDialog):
             if self.ei == oi and self.edit_type in ('number', 'filename'):
                 if self.edit_field is None:
                     rect = (lx + 30, y + 35, 200, 25)
-                    self.edit_field = InputField(rect, max_length=20)
+                    self.edit_field = InputField(rect, max_length=20, dark=self.dark_mode)
                     if self.edit_type == 'number':
                         self.edit_field.set_text(ty.n)
                     else:
@@ -503,37 +519,53 @@ class TyList(DraggableDialog):
             self.edit_field.draw(surface)
 
         page_info = f"第 {self.current_page + 1}/{self.get_total_pages()} 页  共 {len(self._filtered_indices)} 条"
-        surface.blit(rt(f_s, page_info, TXT), (lx + 20, ly + lh - 80))
+        surface.blit(rt(f_s, page_info, tc), (lx + 20, ly + lh - 80))
 
         for action, rect in self._action_buttons().items():
             texts = {'name': self.name_btn_text, 'number': self.number_btn_text,
                      'filename': self.filename_btn_text}
-            self.draw_button(surface, rect, texts[action], BUTTON_BG)
+            if dark:
+                self.draw_dark_button(surface, rect, texts[action])
+            else:
+                self.draw_button(surface, rect, texts[action], BUTTON_BG)
 
         pl = self._page_left_btn()
         pr = self._page_right_btn()
-        pygame.draw.polygon(surface, TXT,
+        pygame.draw.polygon(surface, tc,
             [(pl.right, pl.top), (pl.right, pl.bottom), (pl.left + 4, pl.centery)])
-        pygame.draw.polygon(surface, TXT,
+        pygame.draw.polygon(surface, tc,
             [(pr.left, pr.top), (pr.left, pr.bottom), (pr.right - 4, pr.centery)])
 
-        self.draw_button(surface, self._jump_btn(), self.jump_text, BUTTON_BG)
+        if dark:
+            self.draw_dark_button(surface, self._jump_btn(), self.jump_text)
+        else:
+            self.draw_button(surface, self._jump_btn(), self.jump_text, BUTTON_BG)
 
         if self.jump_active:
             ov = pygame.Surface((self.sim.screen_width, self.sim.screen_height), pygame.SRCALPHA)
-            ov.fill((0, 0, 0, 100))
+            ov.fill((0, 0, 0, 140 if dark else 100))
             surface.blit(ov, (0, 0))
             item_rect = pygame.Rect(self.sim.screen_width // 2 - 100, self.sim.screen_height // 2 - 30, 200, 40)
-            pygame.draw.rect(surface, (255, 255, 255), item_rect)
-            pygame.draw.rect(surface, BUTTON_BORDER, item_rect, 2)
-            prompt = rt(f_s, f"输入页码 (1-{self.get_total_pages()}):", TXT)
+            if dark:
+                pygame.draw.rect(surface, (35, 40, 54), item_rect, 0, 4)
+                pygame.draw.rect(surface, (80, 110, 160), item_rect, 2, 4)
+                pop_tc = SETTINGS_TEXT_LIGHT
+            else:
+                pygame.draw.rect(surface, (255, 255, 255), item_rect)
+                pygame.draw.rect(surface, BUTTON_BORDER, item_rect, 2)
+                pop_tc = TXT
+            prompt = rt(f_s, f"输入页码 (1-{self.get_total_pages()}):", pop_tc)
             surface.blit(prompt, (item_rect.x, item_rect.y - 25))
-            it = rt(f_s, self.jump_input + ("_" if pygame.time.get_ticks() % 1000 < 500 else ""), TXT)
+            it = rt(f_s, self.jump_input + ("_" if pygame.time.get_ticks() % 1000 < 500 else ""), pop_tc)
             surface.blit(it, (item_rect.x + 5, item_rect.y + 10))
             cb = pygame.Rect(item_rect.x + 20, item_rect.y + 50, 60, 30)
             ca = pygame.Rect(item_rect.x + 120, item_rect.y + 50, 60, 30)
-            self.draw_button(surface, cb, self.confirm_text, BUTTON_BORDER)
-            self.draw_button(surface, ca, self.cancel_text, BUTTON_DISABLED)
+            if dark:
+                self.draw_dark_button(surface, cb, self.confirm_text, accent=True)
+                self.draw_dark_button(surface, ca, self.cancel_text)
+            else:
+                self.draw_button(surface, cb, self.confirm_text, BUTTON_BORDER)
+                self.draw_button(surface, ca, self.cancel_text, BUTTON_DISABLED)
             self.jump_confirm_btn = cb
             self.jump_cancel_btn = ca
 
@@ -547,25 +579,32 @@ class TyList(DraggableDialog):
         ty = self.sim.tys[self.hi]
         if not ty.pts:
             return
+        dark = self.dark_mode
+        tc = SETTINGS_TEXT_LIGHT if dark else TXT
         mouse_x, mouse_y = pygame.mouse.get_pos()
         tw, th = 280, 180
         tx = min(mouse_x + 20, self.sim.screen_width - tw - 10)
         ty2 = min(mouse_y + 20, self.sim.screen_height - th - 10)
         text_surface = pygame.Surface((tw, th), pygame.SRCALPHA)
-        text_surface.fill((255, 255, 255, 230))
-        pygame.draw.rect(text_surface, BUTTON_BORDER, (0, 0, tw, th), 2, 8)
+        if dark:
+            text_surface.fill((25, 30, 44, 235))
+            pygame.draw.rect(text_surface, (70, 100, 150), (0, 0, tw, th), 2, 8)
+        else:
+            text_surface.fill((255, 255, 255, 230))
+            pygame.draw.rect(text_surface, BUTTON_BORDER, (0, 0, tw, th), 2, 8)
 
         dn = self.sim.get_display_name(ty)
-        text_surface.blit(rt(f_m, f"台风: {dn}", TXT), (10, 10))
-        text_surface.blit(rt(f_s, f"总点数: {len(ty.pts)}", TXT), (10, 40))
+        text_surface.blit(rt(f_m, f"台风: {dn}", tc), (10, 10))
+        text_surface.blit(rt(f_s, f"总点数: {len(ty.pts)}", tc), (10, 40))
         fp, lp = ty.pts[0], ty.pts[-1]
-        text_surface.blit(rt(f_s, f"起点: {fp['la']:.1f}°N, {fp['lo']:.1f}°E", TXT), (10, 90))
-        text_surface.blit(rt(f_s, f"终点: {lp['la']:.1f}°N, {lp['lo']:.1f}°E", TXT), (10, 110))
-        vw = [p['w'] for p in ty.pts if p['st'].upper() not in ('MD', 'SS', 'SD', 'EX', 'LO')]
-        if vw:
-            mw = max(vw)
-            mc = self.sim.gsc(mw, "")
+        text_surface.blit(rt(f_s, f"起点: {fp['la']:.1f}°N, {fp['lo']:.1f}°E", tc), (10, 90))
+        text_surface.blit(rt(f_s, f"终点: {lp['la']:.1f}°N, {lp['lo']:.1f}°E", tc), (10, 110))
+        vp = [p for p in ty.pts if p['st'].upper() not in ('MD', 'SS', 'SD', 'EX', 'LO')]
+        if vp:
+            mwp = max(vp, key=lambda p: p['w'])
+            mw = mwp['w']
+            mc = self.sim.gsc(mw, mwp.get('st', ''))
         else:
             mw, mc = 0, "N/A"
-        text_surface.blit(rt(f_s, f"最大强度: {mc} ({mw}kt)", TXT), (10, 140))
+        text_surface.blit(rt(f_s, f"最大强度: {display_category(mc)} ({mw}kt)", tc), (10, 140))
         surface.blit(text_surface, (tx, ty2))

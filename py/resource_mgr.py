@@ -94,8 +94,15 @@ class ResourceManager:
                             pygame.image.load(path).convert_alpha()
                     except Exception as e: logger.warning(f"加载登陆图片失败 {key}{sfx}: {e}")
 
-        for strength, suffix in {'C1': 'C1', 'C2': 'C2', 'C3': 'C3', 'C4': 'C4', 'C5': 'C5',
-                                  'TS': 'TS', 'STS': 'TS', 'SS': 'SS', 'TD': 'TD', 'EX': 'EX', 'MD': 'MD'}.items():
+        # 注意：C2-/C3-/C4-ST 等子级别没有独立音效文件，必须映射到主级别，
+        # 否则以这些强度登陆时 get_sound 返回 None → 无声（如 100kt=C3- 登陆）。
+        for strength, suffix in {'C1': 'C1', 'C2': 'C2', 'C2-': 'C2',
+                                  'C3': 'C3', 'C3-': 'C3',
+                                  'C4': 'C4', 'C4-ST': 'C4', 'C5': 'C5',
+                                  'TS': 'TS', 'STS': 'TS', 'SS': 'SS',
+                                  'TD': 'TD', 'SD': 'TD', 'DB': 'TD',
+                                  'LO': 'TD', 'WV': 'TD',
+                                  'EX': 'EX', 'MD': 'MD'}.items():
             path = os.path.join(SOUND_DIR, f"sound.landfall.{suffix}.ogg")
             if not os.path.exists(path):
                 path = os.path.join(SUCAI_DIR, f"sound.landfall.{suffix}.ogg")

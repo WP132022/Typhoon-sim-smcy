@@ -11,6 +11,7 @@ class ChartData:
         'ace_curve_points', 'typhoon_ace_list', 'daily_ace_list',
         'activity_count_list', 'active_periods', 'year_total_ace',
         'year_range',
+        'typhoon_sort_data',
     )
 
     def __init__(self):
@@ -23,6 +24,8 @@ class ChartData:
         self.year_range: Tuple[datetime, datetime, int] = (
             datetime(2000, 1, 1), datetime(2000, 12, 31, 23, 59, 59), 8760
         )
+        self.typhoon_sort_data: List[Tuple[str, float, int, Tuple[int, int, int]]] = []
+        # (name, ace, peak_wind, color)
 
 
 def build_chart_data(sim, year: int, cumulative_to_current: bool,
@@ -52,6 +55,30 @@ def build_chart_data(sim, year: int, cumulative_to_current: bool,
     # 台风 ACE 列表
     typhoon_cache = getattr(sim, '_ace_typhoon_cache', {})
     data.typhoon_ace_list = typhoon_cache.get(year, engine.typhoon_ace_list(year))
+
+    # 补充排序用信息（巅峰风速 + 颜色）
+    td = []
+    name_to_ty = {}
+    for ty in sim.tys:
+        dn = sim.get_display_name(ty)
+        name_to_ty[dn] = ty
+    nt = len(sim.tys)
+    for name, ace in data.typhoon_ace_list:
+        peak_wind = 0
+        start = "9999"
+        color = (100, 150, 255)  # fallback 蓝
+        ty = name_to_ty.get(name)
+        if ty is not None:
+            pts = [p for p in ty.pts if (p.get('w') or 0) >= 0
+                   and p['st'].upper() not in ('MD', 'SS', 'SD', 'EX', 'LO')]
+            if pts:
+                peak_wind = max(p['w'] for p in pts)
+                mwp = max(pts, key=lambda px: px['w'])
+                color = mwp.get('color', (100, 150, 255))
+            if ty.pts and ty.pts[0].get('t'):
+                start = ty.pts[0]['t']
+        td.append((name, ace, peak_wind, tuple(color[:3]), start))
+    data.typhoon_sort_data = td
 
     data.year_total_ace = sim.yad.get(year, 0.0)
 

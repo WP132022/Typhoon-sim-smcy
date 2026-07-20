@@ -465,14 +465,19 @@ class ScriptEngine:
         """执行时间跳跃（委托给 season_ctrl，确保状态一致）。"""
         self.sim.season_ctrl.jump_to(target_date)
         self.sim._sync_season_state()
+        self.sim.update_all_screen_points()
 
     def _update_sim_view(self):
-        """将 sim 的 bounds 同步到视图。"""
+        """将 sim 的 bounds 同步到视图（MOVING 阶段每帧调用）。
+        使用惰性刷新（与缩放机制相同）：仅标记版本号，
+        绘制时按需重算可见台风，避免每帧全量 O(N) 重算。
+        状态切换点（_snap_to_target / _do_time_jump）走全量刷新。"""
         if self.sim.map_mgr.map_view:
             self.sim.map_mgr.map_view.set_view_region(
                 self.sim.mlo, self.sim.Mlo, self.sim.mla, self.sim.Mla)
-        self.sim.map_mgr.update_land_mask()
-        self.sim._invalidate_all_path_caches()
+        # 惰性刷新：仅版本号 + 清空缓存，绘制时按需重算
+        self.sim.invalidate_screen_points_lazy()
+        # 不直接调 update_land_mask：_view_dirty 后主循环延迟陆地重建处理
         self.sim._view_dirty = True
 
     @staticmethod

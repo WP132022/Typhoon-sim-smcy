@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import pygame
 from datetime import datetime
-from .constants import f_s, f_m, rt, TXT, BUTTON_BORDER, BUTTON_DISABLED
+from .constants import f_s, f_m, rt, TXT, BUTTON_BORDER, BUTTON_DISABLED, SETTINGS_TEXT_LIGHT
 from .input_field import InputField
 from .dialog_base import DraggableDialog
 from .utils import lon_to_display, lat_to_display, parse_lon, parse_lat
@@ -21,6 +21,7 @@ class PointEditDialog(DraggableDialog):
         self.confirm_text = rt(f_s, "确认", (255,255,255))
         self.cancel_text = rt(f_s, "取消", (255,255,255))
         self.title = rt(f_m, "编辑报点", TXT)
+        self.title_dark = rt(f_m, "编辑报点", SETTINGS_TEXT_LIGHT)
         self.title_bar_height = 30
 
     def _update_bg_rect(self):
@@ -58,7 +59,8 @@ class PointEditDialog(DraggableDialog):
             col = i % cols
             x = start_x + col * (field_width + spacing)
             y = start_y + 40 + row * 60
-            field = InputField((x, y, field_width, field_height), label=label, max_length=30)
+            field = InputField((x, y, field_width, field_height), label=label,
+                               max_length=30, dark=self.dark_mode)
             if initial_values and i < len(initial_values):
                 key = ['wind','pressure','type','lat','lon','time'][i]
                 val = initial_values.get(key, "")
@@ -98,7 +100,7 @@ class PointEditDialog(DraggableDialog):
                 if field.rect.collidepoint(e.pos):
                     for f in self.fields:
                         f.deactivate()
-                    field.activate()
+                    field.activate_at(e.pos[0])
                     self.current_field = i
                     return True
         # 让当前激活字段处理事件
@@ -159,13 +161,21 @@ class PointEditDialog(DraggableDialog):
     def draw(self, surface: pygame.Surface):
         if not self.active:
             return
-        self.draw_background(surface, self.bg_rect)
-        title_surf = self.title
+        dark = self.dark_mode
+        if dark:
+            self.draw_dark_panel(surface, self.bg_rect)
+        else:
+            self.draw_background(surface, self.bg_rect)
+        title_surf = self.title_dark if dark else self.title
         surface.blit(title_surf, (self.bg_rect.centerx - title_surf.get_width()//2, self.bg_rect.y + 10))
         for field in self.fields:
             field.draw(surface)
         btn_y = self.bg_rect.y + self.bg_rect.height - 45
         confirm_rect = pygame.Rect(self.bg_rect.centerx - 90, btn_y, 80, 30)
         cancel_rect = pygame.Rect(self.bg_rect.centerx + 10, btn_y, 80, 30)
-        self.draw_button(surface, confirm_rect, self.confirm_text, BUTTON_BORDER)
-        self.draw_button(surface, cancel_rect, self.cancel_text, BUTTON_DISABLED)
+        if dark:
+            self.draw_dark_button(surface, confirm_rect, self.confirm_text)
+            self.draw_dark_button(surface, cancel_rect, self.cancel_text)
+        else:
+            self.draw_button(surface, confirm_rect, self.confirm_text, BUTTON_BORDER)
+            self.draw_button(surface, cancel_rect, self.cancel_text, BUTTON_DISABLED)

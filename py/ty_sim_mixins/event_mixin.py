@@ -56,15 +56,16 @@ class TySimEventMixin:
 
         self.input_handler.handle_event(e)
 
+        # 编辑模式：右键优先拖动报点（未命中点时右键仍可拖地图）
+        if self.md == self.MODE_EDIT and self.edit_typhoon and not self.dialog_mgr.any_active():
+            if self._handle_drag_point(e):
+                return True
+
         if self._handle_map_pan(e):
             return True
 
         if self._handle_map_zoom(e):
             return True
-
-        if self.md == self.MODE_EDIT and self.edit_typhoon and not self.dialog_mgr.any_active():
-            if self._handle_drag_point(e):
-                return True
 
         if e.type == pygame.KEYDOWN:
             return self._handle_keydown(e)
@@ -120,7 +121,22 @@ class TySimEventMixin:
             if self.map_mgr.map_view:
                 factor = 1.1 if e.y > 0 else 0.9
                 self.map_mgr.map_view.zoom_at(factor, mx, my)
-                self.update_all_screen_points()
+                if self.right_button_dragging:
+                    # 拖拽中缩放：坐标系冲突，直接全量刷新并清零偏移
+                    self.update_all_screen_points()
+                    self._drag_offset_x = 0
+                    self._drag_offset_y = 0
+                else:
+                    # 惰性刷新：仅可见台风在绘制时重算；
+                    # 突发期(200ms)内跳过平滑样条，停止缩放后恢复
+                    ct = pygame.time.get_ticks()
+                    self.invalidate_screen_points_lazy()
+                    self._zoom_burst_until = ct + 200
+                    if self.smooth_path:
+                        self._smooth_restore_due = ct + 220
+                    if self.md == self.MODE_EDIT and self.edit_typhoon:
+                        self.edit_typhoon.update_screen_points(self.latlon_to_screen)
+                        self.edit_typhoon.v._sp_ver = self._sp_version
                 self._view_dirty = True
             return True
         return False
@@ -130,7 +146,9 @@ class TySimEventMixin:
         if not ty or not ty.pts:
             return False
 
-        if e.type == pygame.MOUSEBUTTONDOWN and e.button == 1:
+        if e.type == pygame.MOUSEBUTTONDOWN and e.button == 3:
+            if self.right_button_dragging:
+                return False
             mx, my = e.pos
             if my < self.map_height:
                 for i, (sx, sy) in enumerate(ty.screen_points):
@@ -147,19 +165,21 @@ class TySimEventMixin:
             mx, my = e.pos
             if my < self.map_height:
                 la, lo = self.screen_to_latlon(mx, my)
+                # 编辑模式：吸附到 0.1°×0.1° 网格
+                la = round(la, 1)
+                lo = round(lo, 1)
                 pt = ty.pts[self.drag_point_index]
-                pt['la'] = la
-                pt['lo'] = lo
-                # 仅更新被拖动的这一个点的屏幕坐标，避免 O(N) 全量重算
-                sx, sy = self.latlon_to_screen(la, lo)
-                if self.drag_point_index < len(ty.screen_points):
-                    ty.screen_points[self.drag_point_index] = (sx, sy)
-                self._drag_needs_save = True
-                # 使该台风的路径缓存失效，下一帧重绘时反映新位置
-                self._invalidate_path_cache_for_ty(ty)
+                if pt['la'] != la or pt['lo'] != lo:
+                    pt['la'] = la
+                    pt['lo'] = lo
+                    # 全量重算屏幕点（含平滑样条），保证连线跟随
+                    ty.update_screen_points(self.latlon_to_screen)
+                    self._drag_needs_save = True
+                    # 使该台风的路径缓存失效，下一帧重绘时反映新位置
+                    self._invalidate_path_cache_for_ty(ty)
             return True
 
-        elif e.type == pygame.MOUSEBUTTONUP and e.button == 1 and self.dragging_point:
+        elif e.type == pygame.MOUSEBUTTONUP and e.button == 3 and self.dragging_point:
             self.dragging_point = False
             self.drag_typhoon = None
             self.drag_point_index = -1

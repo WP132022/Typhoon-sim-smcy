@@ -4,9 +4,10 @@ from __future__ import annotations
 import pygame
 from typing import List, Tuple, Optional
 
-from ..constants import f_s, f_m, rt, TXT, BUTTON_BORDER, DIALOG_TITLE_BAR_HEIGHT
+from ..constants import (f_s, f_m, rt, TXT, DIALOG_TITLE_BAR_HEIGHT,
+                         SETTINGS_TEXT_LIGHT)
 from ..dialog_base import DraggableDialog
-from .chart_helpers import _haversine
+from .chart_helpers import _haversine, build_basin_order, draw_vscrollbar
 
 
 def _ts_eligible(pt: dict) -> bool:
@@ -58,10 +59,7 @@ class PathLengthViewer(DraggableDialog):
     def _build_basin_order(self) -> dict:
         """构建洋区排序字典，复刻台风列表的 basin_order。"""
 
-        areas = getattr(getattr(self.sim, 'res_mgr', None), 'ocean_areas', None)
-        if areas and areas.areas:
-            return {a.code: i for i, a in enumerate(areas.areas)}
-        return {}
+        return build_basin_order(self.sim)
 
     def _sort(self):
         if self._sort_mode == 0:
@@ -77,8 +75,12 @@ class PathLengthViewer(DraggableDialog):
             self._data.sort(key=_sort_key)
 
     def _render(self):
-        if self._cached_surf is not None:
+        if self._cached_surf is not None and getattr(self, '_built_dark', None) == self.dark_mode:
             return
+        dark = self.dark_mode
+        self._built_dark = dark
+        tc = SETTINGS_TEXT_LIGHT if dark else TXT
+        rank_c = (150, 160, 200) if dark else (120, 120, 180)
         w, h = self.bg_rect.width, self.bg_rect.height
         surf = pygame.Surface((w, h), pygame.SRCALPHA)
 
@@ -89,7 +91,7 @@ class PathLengthViewer(DraggableDialog):
         y = 60
         cx = 20
         for label, width in cols:
-            surf.blit(rt(f_m, label, TXT), (cx, y))
+            surf.blit(rt(f_m, label, tc), (cx, y))
             cx += width + 5
         y += 28
 
@@ -101,7 +103,7 @@ class PathLengthViewer(DraggableDialog):
             cx = 20
             vals = [str(i + 1), name, f"{path:.0f}", str(year)]
             for j, (val, (_, cw)) in enumerate(zip(vals, cols)):
-                clr = TXT if j != 0 else (120, 120, 180)
+                clr = tc if j != 0 else rank_c
                 surf.blit(rt(f_s, val, clr), (cx, row_y))
                 cx += cw + 5
 
@@ -110,15 +112,21 @@ class PathLengthViewer(DraggableDialog):
     def draw(self, surface: pygame.Surface):
         if not self.active:
             return
-        self.draw_background(surface, self.bg_rect)
+        dark = self.dark_mode
+        if dark:
+            self.draw_dark_panel(surface, self.bg_rect)
+        else:
+            self.draw_background(surface, self.bg_rect)
         self._render()
         if self._cached_surf:
             surface.blit(self._cached_surf, self.bg_rect.topleft)
 
         bx, by = self.bg_rect.x, self.bg_rect.y
         bw = self.bg_rect.width
-        title = rt(f_m, "台风路径长度", TXT)
-        surface.blit(title, (bx + 12, by + 8))
+        if getattr(self, '_title_cache_dark', None) != dark or getattr(self, '_title_cache', None) is None:
+            self._title_cache = rt(f_m, "台风路径长度", SETTINGS_TEXT_LIGHT if dark else TXT)
+            self._title_cache_dark = dark
+        surface.blit(self._title_cache, (bx + 12, by + 8))
 
         # 排序按钮（仅两个）
         modes = [("按路径长度", 0), ("按台风顺序", 1)]
@@ -126,15 +134,22 @@ class PathLengthViewer(DraggableDialog):
         self._btn_rects = {}
         for label, mode in modes:
             r = pygame.Rect(btn_x, by + 10, 110, 22)
-            self.draw_button(surface, r, rt(f_s, label, (255, 255, 255)),
-                             style='primary' if self._sort_mode == mode else 'light',
-                             enabled=True)
+            if dark:
+                self.draw_dark_button(surface, r, label,
+                                      hover=self._sort_mode == mode)
+            else:
+                self.draw_button(surface, r, rt(f_s, label, (255, 255, 255)),
+                                 style='primary' if self._sort_mode == mode else 'light',
+                                 enabled=True)
             self._btn_rects[label] = r
             btn_x += 118
 
         cb = pygame.Rect(bx + bw - 90, by + 8, 55, 25)
         self._close_btn_rect = cb
-        self.draw_button(surface, cb, rt(f_s, "关闭", (255, 255, 255)))
+        if dark:
+            self.draw_dark_button(surface, cb, "关闭")
+        else:
+            self.draw_button(surface, cb, rt(f_s, "关闭", (255, 255, 255)))
 
         # 滚动条
         self._draw_scrollbar(surface)
@@ -200,20 +215,14 @@ class PathLengthViewer(DraggableDialog):
             self._scrollbar_rect = pygame.Rect(0, 0, 0, 0)
             return
         bw = self.bg_rect.width
-        # 滚动条轨道
         track_x = self.bg_rect.x + bw - 16
         track_top = self.bg_rect.y + 90
         track_h = self._visible_rows * self._row_h
-        track_rect = pygame.Rect(track_x, track_top, 10, track_h)
-        pygame.draw.rect(surface, (200, 210, 220), track_rect, 0, 5)
-        # 滑块
-        thumb_h = max(20, track_h * self._visible_rows / total)
-        avail = track_h - thumb_h
-        ratio = self._scroll_offset / (total - self._visible_rows) if total > self._visible_rows else 0
-        thumb_y = track_top + int(ratio * avail)
-        thumb_rect = pygame.Rect(track_x, thumb_y, 10, thumb_h)
-        pygame.draw.rect(surface, (100, 140, 180), thumb_rect, 0, 5)
-        self._scrollbar_rect = thumb_rect
+        thumb = draw_vscrollbar(surface, track_x, track_top, track_h,
+                                total, self._visible_rows, self._scroll_offset,
+                                width=10, dark=self.dark_mode,
+                                show_track=True, radius=5)
+        self._scrollbar_rect = thumb or pygame.Rect(0, 0, 0, 0)
 
     def deactivate(self):
         super().deactivate()
@@ -230,8 +239,8 @@ class PathLengthViewer(DraggableDialog):
         # 滚动条轨道
         track_top = self.bg_rect.y + 90
         track_h = self._visible_rows * self._row_h
-        # 滑块高度
-        thumb_h = max(20, track_h * self._visible_rows / total)
+        # 滑块高度（与 draw_vscrollbar 一致）
+        thumb_h = max(16, int(track_h * self._visible_rows / total))
         # 可用滑动范围
         avail = track_h - thumb_h
         # 鼠标在轨道内的相对位置

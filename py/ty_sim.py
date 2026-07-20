@@ -7,7 +7,9 @@ import logging
 from typing import List, Optional, Dict, Tuple, TYPE_CHECKING
 from datetime import datetime
 
-from .constants import f_s, rt, TXT, CPH, CONFIG_FILE, USER_PREFS_FILE, SEASON_SPEED_DEFAULT, MAX_INFO_BOX_SLOTS, HEMISPHERE_SOUTH, MODE_NORMAL, MODE_SEASON, MODE_EDIT
+from .constants import (f_s, rt, TXT, CPH, CONFIG_FILE, USER_PREFS_FILE,
+                         SEASON_SPEED_DEFAULT, MAX_INFO_BOX_SLOTS,
+                         HEMISPHERE_SOUTH, MODE_NORMAL, MODE_SEASON, MODE_EDIT)
 from .config import AppConfig
 from .typhoon import Typhoon
 from .landfall_effect import LandfallEffect
@@ -177,6 +179,33 @@ class TySim(TySimUtilsMixin,
         self.map_mgr.update_land_mask()
 
         preload_particles()
+        # 预加载登陆特效帧 / Landed 流 / SMCY 主图标视频（按当前图标大小）
+        try:
+            from .smcy_icon import preload_landfall_effects, preload_icon_streams
+            lf_size = max(20, int(70 * self.cfg.icon_size / 100.0 * 1.5))
+            marker = max(6, int(13 * self.cfg.point_size / 100.0))
+            preload_landfall_effects(lf_size, int(marker * 96 / 40))
+            if getattr(self.cfg, 'icon_set', '') == 'smcy':
+                from .smcy_icon import preload_icon_streams
+                n = preload_icon_streams(self.tys, lf_size)
+                logger.debug(f"SMCY 图标流预加载: {n} 个")
+            # 登陆点标记 png 预热
+            from .ty_sim_mixins._draw_path_mixin import preload_landfall_markers
+            from .landfall_effect import landfall_marker_name
+            names = set()
+            for w, cat in ((40, 'TS'), (60, 'C1'), (80, 'C2'), (100, 'C3'), (120, 'C4'), (155, 'C5'), (170, 'C5')):
+                n = landfall_marker_name(w, cat)
+                if n:
+                    names.add(n)
+            preload_landfall_markers(list(names), marker)
+            # 摘要视频流预热
+            from .smcy_icon import preload_summary_streams
+            bar_h = 64
+            n2 = preload_summary_streams(self.tys, bar_h)
+            if n2:
+                logger.debug(f"Summary 流预加载: {n2} 个")
+        except Exception:
+            logger.debug("特效/图标预加载失败", exc_info=True)
 
         if self.window_topmost:
             self.toggle_window_topmost()
@@ -211,6 +240,8 @@ class TySim(TySimUtilsMixin,
         self.lst = pygame.time.get_ticks()
         self._fps = 60.0
         self.dark_mode = True
+        self._dialog_pause_active = False
+        self._pl_before_dialog = False
 
         self.st = "010100"
         self.ste = 0.0
@@ -245,6 +276,11 @@ class TySim(TySimUtilsMixin,
         self.drag_start_pos = (0, 0)
         self.right_button_dragging = False
         self.right_drag_start_pos = (0, 0)
+
+        # 屏幕坐标惰性刷新（缩放优化）
+        self._sp_version = 0
+        self._zoom_burst_until = 0
+        self._smooth_restore_due: Optional[int] = None
         self._drag_offset_x = 0
         self._drag_offset_y = 0
         self._view_dirty = False
@@ -382,7 +418,23 @@ class TySim(TySimUtilsMixin,
 
     def update_all_screen_points(self) -> None:
         self.view.update_screen_points(self.tys, self.edit_typhoon)
+        ver = self._sp_version
+        for ty in self.tys:
+            ty.v._sp_ver = ver
+        if self.edit_typhoon:
+            self.edit_typhoon.v._sp_ver = ver
         self._invalidate_all_path_caches()
+
+    def invalidate_screen_points_lazy(self) -> None:
+        """标记全部屏幕坐标过期：由 draw_typhoon 按需（仅可见台风）重算。
+        缩放时避免对所有台风做全量坐标+样条重建。"""
+        self._sp_version += 1
+        self._invalidate_all_path_caches()
+        # 清空平滑样条，运动插值立刻回退线性，避免旧视图样条映射出错误经纬度
+        for ty in self.tys:
+            if ty.v.smooth_screen_points:
+                ty.v.smooth_screen_points.clear()
+                ty.v._smooth_arc_lengths.clear()
 
     def update(self, dt: float) -> None:
         ct = pygame.time.get_ticks()
@@ -396,13 +448,21 @@ class TySim(TySimUtilsMixin,
             if not self.right_button_dragging:
                 self._sync_land_state()
 
+        # 缩放突发结束后：惰性恢复平滑样条
+        if self._smooth_restore_due is not None and ct >= self._smooth_restore_due:
+            self._smooth_restore_due = None
+            self.invalidate_screen_points_lazy()
+
+        dialog_open = self.dialog_mgr.any_active()
+        self._update_dialog_pause(dialog_open)
+
         if self.md == MODE_SEASON:
-            self.season_ctrl._pl = self.pl
+            # 任意界面打开时季节时钟一律冻结，避免时钟与台风运动脱节
+            self.season_ctrl._pl = self.pl and not dialog_open
             self.season_ctrl.update(dt)
 
         self.script_engine.update(dt)
 
-        dialog_open = self.dialog_mgr.any_active()
         self.playback_ctrl._pl = self.pl
         self.playback_ctrl.update_all(ct, dt, dialog_open, self.season_ctrl)
         self.effects = self.playback_ctrl.effects
@@ -414,6 +474,24 @@ class TySim(TySimUtilsMixin,
         if self.md == MODE_SEASON and self.pl:
             self._check_monthly_summary()
         self._ms.update(dt)
+
+    def _set_playing(self, playing: bool) -> None:
+        """设置播放状态并同步播放按钮文字。"""
+        self.pl = playing
+        self.play_text = rt(f_s, "暂停" if playing else "播放", (255, 255, 255))
+
+    def _update_dialog_pause(self, dialog_open: bool) -> None:
+        """打开任意界面时自动暂停，全部关闭后恢复原播放状态。
+        若期间用户手动改变了播放状态（空格/播放键/脚本启动），以用户操作为准。"""
+        if dialog_open and not self._dialog_pause_active:
+            self._dialog_pause_active = True
+            self._pl_before_dialog = self.pl
+            if self.pl:
+                self._set_playing(False)
+        elif not dialog_open and self._dialog_pause_active:
+            self._dialog_pause_active = False
+            if not self.pl and self._pl_before_dialog:
+                self._set_playing(True)
 
     def _sync_to_season_ctrl(self) -> None:
         sc = self.season_ctrl

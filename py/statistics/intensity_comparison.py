@@ -6,11 +6,13 @@ from datetime import datetime
 from typing import List, Tuple, Optional
 
 from ..constants import (
-    f_s, f_m, f_l, rt, TXT, BUTTON_BORDER, DIALOG_TITLE_BAR_HEIGHT,
+    f_s, f_l, rt, TXT,
+    SETTINGS_DARK_BG, SETTINGS_TEXT_LIGHT,
 )
 from ..dialog_base import DraggableDialog
-from .shared import COLORS, _THRESHOLDS
-from .intensity_chart import _FILL_BANDS
+from .shared import COLORS, _THRESHOLDS, _FILL_BANDS
+from .chart_helpers import (draw_dashed_h, draw_dashed_v,
+                            draw_fill_bands, draw_tooltip, draw_vscrollbar)
 
 _CHART_BG = (255, 255, 255, 235)
 _CHART_BORDER = TXT
@@ -66,6 +68,14 @@ class IntensityComparisonDialog(DraggableDialog):
         self.bg_rect.y = max(0, (self.sim.screen_height - h) // 2)
 
     def _build(self):
+        dark = self.dark_mode
+        self._built_dark = dark
+        bg = SETTINGS_DARK_BG if dark else _CHART_BG
+        border = (208, 216, 234) if dark else _CHART_BORDER
+        tc = SETTINGS_TEXT_LIGHT if dark else TXT
+        grid_y = (255, 255, 255, 60) if dark else _GRID_COLOR
+        grid_x = (255, 255, 255, 55) if dark else (180, 190, 200, 120)
+
         w = min(1700, self.sim.screen_width - 20)
         content_h = min(820, self.sim.screen_height - 100)
         self._content_h = 820
@@ -81,11 +91,11 @@ class IntensityComparisonDialog(DraggableDialog):
         chart_top = self._margin_t
 
         surf = pygame.Surface((w, self._content_h), pygame.SRCALPHA)
-        pygame.draw.rect(surf, _CHART_BG, (0, 0, w, self._content_h), 0, 10)
-        pygame.draw.rect(surf, _CHART_BORDER, (0, 0, w, self._content_h), 2, 10)
+        pygame.draw.rect(surf, bg, (0, 0, w, self._content_h), 0, 10)
+        pygame.draw.rect(surf, border, (0, 0, w, self._content_h), 2, 10)
 
         # 标题
-        title = rt(f_l, f"强度对比 — {self._year}", TXT)
+        title = rt(f_l, f"强度对比 — {self._year}", tc)
         surf.blit(title, ((w - title.get_width()) // 2, 12))
 
         # ── 收集全局 Y 范围 ──
@@ -100,30 +110,15 @@ class IntensityComparisonDialog(DraggableDialog):
         y_max = ((max_wind // 20) + 1) * 20 + 20
 
         # ── 强度填充带 ──
-        for y_lower, y_upper, color in _FILL_BANDS:
-            if y_lower >= y_max:
-                continue
-            y_upper_clamped = min(y_upper, y_max)
-            if y_upper_clamped <= y_lower:
-                continue
-            rel_top = (y_upper_clamped - 0) / (y_max - 0)
-            rel_bottom = (y_lower - 0) / (y_max - 0)
-            fy = chart_top + ch_h - int(rel_top * ch_h)
-            fh = max(1, int((rel_top - rel_bottom) * ch_h))
-            alpha_color = (color[0], color[1], color[2], 65)
-            fill_surf = pygame.Surface((ch_w, fh), pygame.SRCALPHA)
-            fill_surf.fill(alpha_color)
-            surf.blit(fill_surf, (chart_left, fy))
+        draw_fill_bands(surf, _FILL_BANDS, chart_left, chart_top, ch_w, ch_h,
+                        y_max, alpha=80 if dark else 65)
 
         # ── Y 轴虚线 + 标签 ──
         for yt in range(0, int(y_max) + 1, 20):
             rel = (yt - 0) / (y_max - 0)
             y_px = chart_top + ch_h - int(rel * ch_h)
-            for dx in range(0, ch_w, 8):
-                x1 = chart_left + dx
-                x2 = min(chart_left + dx + 4, chart_left + ch_w)
-                pygame.draw.line(surf, _GRID_COLOR, (x1, y_px), (x2, y_px), 1)
-            lbl = rt(f_s, f"{yt}", TXT)
+            draw_dashed_h(surf, chart_left, chart_left + ch_w, y_px, grid_y, 4, 4)
+            lbl = rt(f_s, f"{yt}", tc)
             surf.blit(lbl, (chart_left - lbl.get_width() - 8, y_px - lbl.get_height() // 2))
 
         # ── 阈值实线 ──
@@ -171,15 +166,12 @@ class IntensityComparisonDialog(DraggableDialog):
         for xh in range(0, int(global_max_hours) + 1, 24):
             rel = xh / global_max_hours
             x_px = chart_left + int(rel * ch_w)
-            for dy in range(0, ch_h, 8):
-                y1 = chart_top + dy
-                y2 = min(chart_top + dy + 4, chart_top + ch_h)
-                pygame.draw.line(surf, (180, 190, 200, 120), (x_px, y1), (x_px, y2), 1)
-            lbl = rt(f_s, f"{xh}h", TXT)
+            draw_dashed_v(surf, x_px, chart_top, chart_top + ch_h, grid_x, 4, 4)
+            lbl = rt(f_s, f"{xh}h", tc)
             surf.blit(lbl, (x_px - lbl.get_width() // 2, y_bottom + 5))
 
         # X 轴标签
-        x_axis_lbl = rt(f_s, x_label, TXT)
+        x_axis_lbl = rt(f_s, x_label, tc)
         surf.blit(x_axis_lbl, (chart_left + ch_w // 2 - x_axis_lbl.get_width() // 2, y_bottom + 24))
 
         # ── 第二遍：绘制曲线 ──
@@ -220,7 +212,7 @@ class IntensityComparisonDialog(DraggableDialog):
             color = COLORS[t_idx % len(COLORS)]
             name = self.sim.get_display_name(ty)
             pygame.draw.line(surf, color, (legend_x, legend_y + 5), (legend_x + 20, legend_y + 5), 3)
-            lbl = rt(f_s, name, TXT)
+            lbl = rt(f_s, name, tc)
             surf.blit(lbl, (legend_x + 24, legend_y - 1))
             legend_x += lbl.get_width() + 40
             if legend_x > chart_left + ch_w - 100:
@@ -233,24 +225,28 @@ class IntensityComparisonDialog(DraggableDialog):
     #  绘制
     # ═══════════════════════════════════════════════
     def draw(self, surface: pygame.Surface):
-        if not self.active or self._cached_surf is None:
+        if not self.active:
             return
+        if self._cached_surf is None or getattr(self, '_built_dark', None) != self.dark_mode:
+            if not self._tys:
+                return
+            self._build()
         bx, by = self.bg_rect.x, self.bg_rect.y
         bw, bh = self.bg_rect.width, self.bg_rect.height
         src_rect = pygame.Rect(0, self._scroll_y, bw, bh)
         surface.blit(self._cached_surf, (bx, by), area=src_rect)
 
         # 滚动条
-        if self._content_h > bh:
-            bar_h = max(20, int(bh * bh / self._content_h))
-            bar_y = by + int(self._scroll_y * bh / self._content_h)
-            pygame.draw.rect(surface, (160, 160, 160),
-                             pygame.Rect(bx + bw - 8, bar_y, 6, bar_h), border_radius=3)
+        draw_vscrollbar(surface, bx + bw - 8, by, bh,
+                        self._content_h, bh, self._scroll_y, dark=self.dark_mode)
 
         # 关闭按钮
         cb = pygame.Rect(bx + bw - 90, by + 8, 55, 25)
         self._close_btn_rect = cb
-        self.draw_button(surface, cb, rt(f_s, "关闭", (255, 255, 255)))
+        if self.dark_mode:
+            self.draw_dark_button(surface, cb, "关闭")
+        else:
+            self.draw_button(surface, cb, rt(f_s, "关闭", (255, 255, 255)))
 
         # 悬停提示
         mx, my = pygame.mouse.get_pos()
@@ -261,18 +257,8 @@ class IntensityComparisonDialog(DraggableDialog):
         for r_local, info in self._hover_rects:
             r_global = r_local.move(ox, oy)
             if r_global.collidepoint(mx, my):
-                tip = rt(f_s, info, TXT)
-                tw, th = tip.get_width() + 10, tip.get_height() + 8
-                tx, ty_ = mx + 15, my - 25
-                if ty_ < 0:
-                    ty_ = my + 15
-                if tx + tw > self.sim.screen_width:
-                    tx = self.sim.screen_width - tw - 5
-                tb = pygame.Surface((tw, th), pygame.SRCALPHA)
-                tb.fill((255, 255, 255, 210))
-                pygame.draw.rect(tb, BUTTON_BORDER, (0, 0, tw, th), 1)
-                tb.blit(tip, (5, 4))
-                surface.blit(tb, (tx, ty_))
+                draw_tooltip(surface, info, (mx, my),
+                             self.sim.screen_width, dark=self.dark_mode)
                 break
 
     # ═══════════════════════════════════════════════

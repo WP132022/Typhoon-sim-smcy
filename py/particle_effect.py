@@ -10,6 +10,7 @@ import pygame
 from PIL import Image as PILImage
 
 from .constants import SUCAI_DIR, ICON_SET_SMCY
+from .utils import play_sound
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +27,32 @@ _note_ts_sound: Optional[pygame.mixer.Sound] = None
 def preload_particles() -> None:
     _load_eri_gif()
     _load_note_ts_frames()
+    _load_eri_sound()
+    _load_note_ts_sound()
+
+
+def _load_eri_sound():
+    global _eri_sound
+    if _eri_sound is None:
+        path = os.path.join('./sound/', 'ERI-1.ogg')
+        if os.path.exists(path):
+            try:
+                _eri_sound = pygame.mixer.Sound(path)
+            except Exception as e:
+                logger.debug(f"加载 ERI-1.ogg 失败: {e}")
+    return _eri_sound
+
+
+def _load_note_ts_sound():
+    global _note_ts_sound
+    if _note_ts_sound is None:
+        path = os.path.join('./sound/', 'note_ts.ogg')
+        if os.path.exists(path):
+            try:
+                _note_ts_sound = pygame.mixer.Sound(path)
+            except Exception as e:
+                logger.debug(f"加载 note_ts.ogg 失败: {e}")
+    return _note_ts_sound
 
 
 def _load_eri_gif() -> List[pygame.Surface]:
@@ -50,38 +77,24 @@ def _load_eri_gif() -> List[pygame.Surface]:
 
 
 def play_eri_sound(volume: float = 0.6) -> None:
-    global _eri_sound
-    if _eri_sound is None:
-        path = os.path.join('./sound/', 'ERI-1.ogg')
-        if os.path.exists(path):
-            try:
-                _eri_sound = pygame.mixer.Sound(path)
-            except Exception as e:
-                logger.debug(f"加载 ERI-1.ogg 失败: {e}")
-    if _eri_sound:
-        _eri_sound.set_volume(volume)
-        _eri_sound.play()
+    snd = _load_eri_sound()
+    if snd:
+        play_sound(snd, volume)
 
 
 def play_note_ts_sound(volume: float = 0.6) -> None:
-    global _note_ts_sound
-    if _note_ts_sound is None:
-        path = os.path.join('./sound/', 'note_ts.ogg')
-        if os.path.exists(path):
-            try:
-                _note_ts_sound = pygame.mixer.Sound(path)
-            except Exception as e:
-                logger.debug(f"加载 note_ts.ogg 失败: {e}")
-    if _note_ts_sound:
-        _note_ts_sound.set_volume(volume)
-        _note_ts_sound.play()
+    snd = _load_note_ts_sound()
+    if snd:
+        play_sound(snd, volume)
 
 
 class RIEffect:
     """快速增强（RI）粒子特效，跟随台风移动。
-    动画持续模拟 6 小时，进度基于台风模拟时间 (typhoon.at) 而非挂钟。"""
+    按真实时间播放（约 0.9s），避免高倍速下瞬间结束而看不到。"""
 
-    _DURATION = 0.5  # points_time 单位，0.5 = 6 模拟小时
+    _DURATION_MS = 900
+    _scaled_cache: Dict[Tuple[int, int, int], pygame.Surface] = {}
+    _SCALED_CACHE_MAX = 128
 
     def __init__(self, typhoon, start_time: float,
                  latlon_to_screen_func, icon_factor: float = 1.0,
@@ -90,7 +103,6 @@ class RIEffect:
         self.start_time = start_time
         self.latlon_to_screen = latlon_to_screen_func
         self.icon_factor = icon_factor
-        self._start_at = start_at if start_at else typhoon.at
         self.frames = _load_eri_gif()
         self._frame_count = len(self.frames)
         self._cur_idx = 0
@@ -98,12 +110,14 @@ class RIEffect:
     def update(self, current_time: float) -> bool:
         if self._frame_count <= 0:
             return False
-        progress = min(1.0, (self.typhoon.at - self._start_at) / self._DURATION)
-        self._cur_idx = int(progress * self._frame_count)
+        elapsed = current_time - self.start_time
+        if elapsed < 0:
+            return False
+        self._cur_idx = int(elapsed / self._DURATION_MS * self._frame_count)
         return self._cur_idx < self._frame_count
 
     def draw(self, surface: pygame.Surface, current_time: float) -> None:
-        if self._frame_count == 0 or self._cur_idx >= self._frame_count:
+        if not (0 <= self._cur_idx < self._frame_count):
             return
         pos = self.typhoon.cpos()
         if not pos:
@@ -113,7 +127,14 @@ class RIEffect:
         size = max(40, int(100 * self.icon_factor))
         sw = max(1, int(frame.get_width() * size / 640))
         sh = max(1, int(frame.get_height() * size / 640))
-        scaled = pygame.transform.smoothscale(frame, (sw, sh))
+        key = (self._cur_idx, sw, sh)
+        cache = RIEffect._scaled_cache
+        scaled = cache.get(key)
+        if scaled is None:
+            scaled = pygame.transform.smoothscale(frame, (sw, sh))
+            if len(cache) >= self._SCALED_CACHE_MAX:
+                cache.pop(next(iter(cache)))
+            cache[key] = scaled
         r = scaled.get_rect(center=(x, y))
         surface.blit(scaled, r)
 
@@ -173,12 +194,18 @@ class TSNoteEffect:
         self._angle = (base_angle + self._ROT_FIX_DEG) % 360.0
         self._mirror = v.mirror
         self._cur_idx = 0
+        self._played = 0           # SMCY 模式下已播放帧数（防图标帧号回绕导致残影）
         self._img_cache: Dict[Tuple[int, int], pygame.Surface] = {}
 
     def _frame_idx(self, current_time: float) -> int:
         if self._smcy:
             from .smcy_icon import _TOTAL_FRAMES
-            return (self.typhoon.v._smcy_frame - self._start_icon_frame) % _TOTAL_FRAMES
+            rel = (self.typhoon.v._smcy_frame - self._start_icon_frame) % _TOTAL_FRAMES
+            # 检测回绕：rel 突然变小说明 _smcy_frame 绕了一圈
+            if self._played > 0 and rel < self._played:
+                return self._frame_count    # 越界值，触发 update→False
+            self._played = max(self._played, rel)
+            return rel
         return int((current_time - self.start_time) / 1000.0 * 60.0)
 
     def update(self, current_time: float) -> bool:
@@ -206,7 +233,8 @@ class TSNoteEffect:
                 img = pygame.transform.rotate(img, self._angle)
             if self._mirror:
                 img = pygame.transform.flip(img, True, False)
-            self._img_cache.clear()
+            if len(self._img_cache) >= 128:
+                self._img_cache.pop(next(iter(self._img_cache)))
             self._img_cache[key] = img
         r = img.get_rect(center=(x, y))
         surface.blit(img, r)

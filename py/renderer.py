@@ -90,6 +90,8 @@ class Renderer:
             color = FPS_YELLOW
         else:
             color = FPS_RED
-        fps_text = rt(f_s, f"FPS: {fps:.0f}", color)
+        tu = getattr(self.sim, '_t_update_ms', 0)
+        td = getattr(self.sim, '_t_draw_ms', 0)
+        fps_text = rt(f_s, f"FPS: {fps:.0f}  U:{tu}ms D:{td}ms", color)
         x = self.sim.screen_width - fps_text.get_width() - 8
         surface.blit(fps_text, (x, 8))

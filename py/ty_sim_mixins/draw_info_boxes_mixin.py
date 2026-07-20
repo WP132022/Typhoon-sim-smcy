@@ -24,6 +24,9 @@ _font_date = pygame.font.Font(os.path.join(_FONT_DIR, FONT_FILE), 54)
 _font_sub = SmartFont(_load_font(FONT_FILE, 27, 27), _load_font(FONT_FILE, 27, 27))
 _font_month = pygame.font.Font(os.path.join(_FONT_DIR, FONT_FILE), 30)
 _font_box = SmartFont(_load_font(FONT_FILE, 18, 18), _load_font(FONT_FILE, 18, 18))
+_font_ace_title = SmartFont(_load_font(FONT_FILE, 18, 18), _load_font(FONT_FILE, 18, 18))
+_font_ace = SmartFont(_load_font(FONT_FILE, 34, 34), _load_font(FONT_FILE, 34, 34))
+_font_ace_note = SmartFont(_load_font(FONT_FILE, 25, 25), _load_font(FONT_FILE, 25, 25))
 
 _BOX_PAD = 4
 
@@ -33,6 +36,45 @@ _STROKE = [(dx, dy) for dx in (-1, 0, 1) for dy in (-1, 0, 1) if dx or dy]
 
 _ACE_NOTE_DURATION_MS = 2500
 _ACE_NOTE_FADE_MS = 500
+
+# ── 描边文字缓存：key=(字体id, 文本, 颜色) → 已合成描边 Surface ──
+_stroked_cache: dict = {}
+_STROKED_CACHE_MAX = 128
+
+
+def _stroked(font, text: str, color) -> pygame.Surface:
+    """黑色 8 向描边 + 前景色文字，整体合成并缓存（锚点 = 原文字位置 -1,-1）。"""
+    key = (id(font), text, color)
+    surf = _stroked_cache.get(key)
+    if surf is None:
+        fg = font.render(text, True, color)
+        bk = font.render(text, True, (0, 0, 0))
+        surf = pygame.Surface((fg.get_width() + 2, fg.get_height() + 2), pygame.SRCALPHA)
+        for dx, dy in _STROKE:
+            surf.blit(bk, (dx + 1, dy + 1))
+        surf.blit(fg, (1, 1))
+        if len(_stroked_cache) >= _STROKED_CACHE_MAX:
+            _stroked_cache.pop(next(iter(_stroked_cache)))
+        _stroked_cache[key] = surf
+    return surf
+
+
+# ── 淡入淡出半透明副本缓存：alpha 量化 16 档，避免每帧 copy ──
+_faded_cache: dict = {}
+_FADED_CACHE_MAX = 64
+
+
+def _faded_copy(surf: pygame.Surface, alpha: int) -> pygame.Surface:
+    bucket = max(0, min(15, alpha // 16))
+    key = (id(surf), bucket)
+    out = _faded_cache.get(key)
+    if out is None:
+        out = surf.copy()
+        out.set_alpha(bucket * 16 + 15)
+        if len(_faded_cache) >= _FADED_CACHE_MAX:
+            _faded_cache.pop(next(iter(_faded_cache)))
+        _faded_cache[key] = out
+    return out
 
 
 class TySimDrawInfoBoxesMixin:
@@ -51,22 +93,23 @@ class TySimDrawInfoBoxesMixin:
 
     @classmethod
     def _season_info_box_height(cls) -> int:
-        """信息框高度：上下边距相同，4 行文字。"""
-        return _BOX_PAD * 2 + 4 * cls._season_info_box_line_height()
+        """信息框高度：上下边距相同，5 行文字。"""
+        return _BOX_PAD * 2 + 5 * cls._season_info_box_line_height()
 
-    def _render_info_box(self, ty, box_w: int, box_h: int) -> pygame.Surface:
+    def _render_info_box(self, ty, box_w: int, box_h: int):
+        """渲染信息框主体（不含实时ACE数字）。
+        返回 (box, ace_x, ace_y, tc)：数字由调用方每帧单独绘制。"""
         # ── 检查缓存 ──
         cp = ty.cp()
+        dark = getattr(self, 'dark_mode', True)
         key_data = (
             ty.b, ty.n, ty.tace,
             cp['w'] if cp else 0,
-            ty.cace if cp else 0.0,
-            ty.ci,
+            ty.ci, dark,
         )
         if ty in self._season_info_box_cache and self._season_info_box_last_data.get(ty) == key_data:
             return self._season_info_box_cache[ty]
 
-        dark = getattr(self, 'dark_mode', True)
         box = pygame.Surface((box_w, box_h), pygame.SRCALPHA)
 
         # 暗色主题样式
@@ -111,26 +154,39 @@ class TySimDrawInfoBoxesMixin:
 
         max_wind = max_wind_from_points(ty.pts)
         current_wind = cp['w'] if cp else "?"
-        current_ace = ty.cace if cp else 0.0
+        cur_st = (cp['st'].upper() if cp and cp['st'] else '-') if cp else '-'
+        cur_pres = cp['p'] if cp else 0
 
         lines = [
             f"{ty.basin}{ty.n} {tyy} {tn}",
             f"{sf}-{ef} ({td}天)",
             f"巅峰:{max_wind}kt 实时:{current_wind}kt",
-            f"总ACE:{ty.tace:.4f} 实时ACE:{current_ace:.4f}",
+            f"气压:{cur_pres}hPa" if cur_pres else "气压:-",
+            f"总ACE:{ty.tace:.4f} 实时ACE:",
         ]
         line_h = self._season_info_box_line_height()
         text_x = 16
         y = _BOX_PAD
-        for ln in lines:
-            surf_ln = rt(_font_box, ln, tc, box_w - text_x - 8)
+        st_surf = rt(_font_box, cur_st, tc)
+        ace_x = ace_y = 0
+        for i, ln in enumerate(lines):
+            max_w = box_w - text_x - 8
+            if i == 0:
+                # 第一行最右边：当前性质（首行文字避让）
+                max_w -= st_surf.get_width() + 8
+                box.blit(st_surf, (box_w - 10 - st_surf.get_width(), y))
+            surf_ln = rt(_font_box, ln, tc, max_w)
             box.blit(surf_ln, (text_x, y))
+            if i == 4:
+                ace_x = text_x + surf_ln.get_width()
+                ace_y = y
             y += line_h
 
         # ── 存入缓存 ──
-        self._season_info_box_cache[ty] = box
+        result = (box, ace_x, ace_y, tc)
+        self._season_info_box_cache[ty] = result
         self._season_info_box_last_data[ty] = key_data
-        return box
+        return result
 
     _BOX_FADE_MS = 400
 
@@ -201,11 +257,22 @@ class TySimDrawInfoBoxesMixin:
             x = start_x + c * (box_w + spacing_x)
             y = start_y + r * (box_h + spacing_y)
 
-            box = self._render_info_box(ty, box_w, box_h)
+            box, ace_x, ace_y, tc = self._render_info_box(ty, box_w, box_h)
+            # 实时ACE数字：每帧单独渲染（ASCII，用底层字体避免污染 SmartFont 缓存）
+            digits = _font_box.en_font.render(f"{ty.cace:.4f}", True, tc)
             if alpha < 255:
-                box = box.copy()
-                box.set_alpha(alpha)
-            surface.blit(box, (x, y))
+                # 从左侧滑入/滑出（缓出）+ 淡入淡出
+                t = alpha / 255.0
+                ease = 1.0 - (1.0 - t) ** 3
+                x = int(x - (x + box_w) * (1.0 - ease))
+                faded = _faded_copy(box, alpha)
+                surface.blit(faded, (x, y))
+                d = digits.copy()
+                d.set_alpha(alpha)
+                surface.blit(d, (x + ace_x, y + ace_y))
+            else:
+                surface.blit(box, (x, y))
+                surface.blit(digits, (x + ace_x, y + ace_y))
 
     def draw_season_clock(self, surface: pygame.Surface) -> None:
         tr = 80
@@ -239,42 +306,35 @@ class TySimDrawInfoBoxesMixin:
 
         # 年份（上方，紧贴外环）
         year_str = str(self.sy)
-        year_surf = _font_sub.render(year_str, True, (255, 255, 255))
-        yx = cx - year_surf.get_width() // 2
-        yy = cy - tr - year_surf.get_height()
-        for dx, dy in _STROKE:
-            surface.blit(_font_sub.render(year_str, True, (0, 0, 0)), (yx + dx, yy + dy))
+        year_surf = _stroked(_font_sub, year_str, (255, 255, 255))
+        yx = cx - (year_surf.get_width() - 2) // 2 - 1
+        yy = cy - tr - (year_surf.get_height() - 2) - 1
         surface.blit(year_surf, (yx, yy))
 
         # 月份 + 日期（偏下）
         month_idx = int(self.st[0:2])
         month_str = _MONTHS[month_idx] if 1 <= month_idx <= 12 else self.st[0:2]
         day_str = str(int(self.st[2:4]))
-        month_surf = _font_month.render(month_str, True, (255, 255, 255))
-        day_surf = _font_date.render(day_str, True, (255, 255, 255))
-        month_black = _font_month.render(month_str, True, (0, 0, 0))
-        day_black = _font_date.render(day_str, True, (0, 0, 0))
+        month_surf = _stroked(_font_month, month_str, (255, 255, 255))
+        day_surf = _stroked(_font_date, day_str, (255, 255, 255))
         gap_md = 2
-        total_md_h = month_surf.get_height() + day_surf.get_height() + gap_md
+        month_h = month_surf.get_height() - 2
+        day_h = day_surf.get_height() - 2
+        total_md_h = month_h + day_h + gap_md
         md_top = cy - total_md_h // 2
-        mx = cx - month_surf.get_width() // 2
-        dx = cx - day_surf.get_width() // 2
-        dy_s = md_top + month_surf.get_height() + gap_md
-        for sx, sy in _STROKE:
-            surface.blit(month_black, (mx + sx, md_top + sy))
-            surface.blit(day_black, (dx + sx, dy_s + sy))
-        surface.blit(month_surf, (mx, md_top))
-        surface.blit(day_surf, (dx, dy_s))
+        mx = cx - (month_surf.get_width() - 2) // 2
+        dx = cx - (day_surf.get_width() - 2) // 2
+        dy_s = md_top + month_h + gap_md
+        surface.blit(month_surf, (mx - 1, md_top - 1))
+        surface.blit(day_surf, (dx - 1, dy_s - 1))
 
         # 时分（下方）
         hour = int(day_seconds / 3600)
         minute = int((day_seconds % 3600) / 60)
         time_str = f"{hour:02d}{minute:02d}Z"
-        time_surf = _font_sub.render(time_str, True, (255, 255, 255))
-        text_x = cx - time_surf.get_width() // 2
-        text_y = cy + tr + 5
-        for sx, sy in _STROKE:
-            surface.blit(_font_sub.render(time_str, True, (0, 0, 0)), (text_x + sx, text_y + sy))
+        time_surf = _stroked(_font_sub, time_str, (255, 255, 255))
+        text_x = cx - (time_surf.get_width() - 2) // 2 - 1
+        text_y = cy + tr + 5 - 1
         surface.blit(time_surf, (text_x, text_y))
 
     def draw_control_panel(self, surface) -> None:
@@ -313,33 +373,36 @@ class TySimDrawInfoBoxesMixin:
         self._draw_progress(surface, label, self.csa, cya, self.screen_width - 10)
 
     def _draw_progress(self, surface, label, current_ace, total_ace, right):
-        w, h = 330, 30
+        w, h = 495, 45
         x = right - w
 
-        surface.blit(rt(f_s, "Accumulated Cyclone Energy", (200, 200, 210)), (x, 10))
-        pygame.draw.rect(surface, (255, 255, 255), (x, 30, w, h), 2)
+        title = _stroked(_font_ace_title, "Accumulated Cyclone Energy", (200, 200, 210))
+        surface.blit(title, (x - 1, 8 - 1))
+        pygame.draw.rect(surface, (255, 255, 255), (x, 32, w, h), 3)
         if total_ace > 0:
             fw = int(w * min(1.0, current_ace / total_ace))
-            pygame.draw.rect(surface, (255, 200, 0), (x, 30, fw, h))
+            pygame.draw.rect(surface, (255, 200, 0), (x, 32, fw, h))
 
+        # 数值每帧变化（插值模式），直接用底层字体渲染，避免污染 SmartFont 缓存
         val = f"{current_ace:.4f}"
-        black = rt(_font_sub, val, (0, 0, 0))
-        white = rt(_font_sub, val, (255, 255, 255))
-        text_x = x + w - white.get_width() - 8
-        text_y = 30 + (h - white.get_height()) // 2
-        for dx, dy in [(-1, -1), (-1, 0), (-1, 1), (0, -1), (0, 1), (1, -1), (1, 0), (1, 1)]:
+        vf = _font_ace.en_font
+        black = vf.render(val, True, (0, 0, 0))
+        white = vf.render(val, True, (255, 255, 255))
+        text_x = x + w - white.get_width() - 12
+        text_y = 32 + (h - white.get_height()) // 2
+        for dx, dy in _STROKE:
             surface.blit(black, (text_x + dx, text_y + dy))
         surface.blit(white, (text_x, text_y))
 
-        self._draw_ace_note(surface, x, h)
+        self._draw_ace_note(surface, x, 32, h)
 
         if getattr(self, 'show_ace_total', True):
-            ls = rt(_font_sub, label, (255, 255, 255))
-            surface.blit(ls, (right - ls.get_width(), 68))
-            ys = rt(_font_sub, f"{total_ace:.4f}", (255, 255, 255))
-            surface.blit(ys, (right - ys.get_width(), 100))
+            ls = _stroked(_font_ace, label, (255, 255, 255))
+            surface.blit(ls, (right - ls.get_width() + 1, 89 - 1))
+            ys = _stroked(_font_ace, f"{total_ace:.4f}", (255, 255, 255))
+            surface.blit(ys, (right - ys.get_width() + 1, 137 - 1))
 
-    def _draw_ace_note(self, surface, bar_x, bar_h):
+    def _draw_ace_note(self, surface, bar_x, bar_y, bar_h):
         """在 ACE 进度条内左侧显示最近结束台风的 '台风名 +ACE'。"""
         note = getattr(getattr(self, 'playback_ctrl', None), 'ace_note', None)
         if not note:
@@ -348,8 +411,8 @@ class TySimDrawInfoBoxesMixin:
         if elapsed >= _ACE_NOTE_DURATION_MS:
             return
         txt = (f"{note['name']} " if note['name'] else "") + f"+{note['ace']:.4f}"
-        black = rt(f_19, txt, (0, 0, 0))
-        colored = rt(f_19, txt, note['color'])
+        black = rt(_font_ace_note, txt, (0, 0, 0))
+        colored = rt(_font_ace_note, txt, note['color'])
         remain = _ACE_NOTE_DURATION_MS - elapsed
         if remain < _ACE_NOTE_FADE_MS:
             alpha = max(0, int(255 * remain / _ACE_NOTE_FADE_MS))
@@ -357,8 +420,8 @@ class TySimDrawInfoBoxesMixin:
             black.set_alpha(alpha)
             colored = colored.copy()
             colored.set_alpha(alpha)
-        nx = bar_x + 8
-        ny = 30 + (bar_h - colored.get_height()) // 2
+        nx = bar_x + 10
+        ny = bar_y + (bar_h - colored.get_height()) // 2
         for dx, dy in _STROKE:
             surface.blit(black, (nx + dx, ny + dy))
         surface.blit(colored, (nx, ny))
